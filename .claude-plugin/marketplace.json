@@ -1,0 +1,8 @@
+{
+  "plugins": [
+    {
+      "name": "git-guardrails",
+      "description": "Lightweight git workflow nudges: branch protection warnings and commit reminders after idle periods"
+    }
+  ]
+}

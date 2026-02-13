@@ -1,0 +1,14 @@
+{
+  "name": "git-guardrails",
+  "description": "Lightweight git workflow nudges: branch protection warnings and commit reminders after idle periods",
+  "version": "0.1.0",
+  "author": {
+    "name": "cameronsjo"
+  },
+  "keywords": [
+    "git",
+    "hooks",
+    "workflow",
+    "guardrails"
+  ]
+}
