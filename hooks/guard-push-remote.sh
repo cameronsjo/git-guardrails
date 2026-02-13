@@ -14,7 +14,13 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # Quick exit: no git push, no problem
 echo "$COMMAND" | grep -qw 'git push' || exit 0
 
-ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-cameronsjo}"
+ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-}"
+
+if [ -z "$ALLOWED_OWNERS" ]; then
+  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up"
+  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set."
+  exit 2
+fi
 
 # --- Helpers ---
 
