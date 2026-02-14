@@ -1,0 +1,21 @@
+#!/bin/bash
+# Auto-bump plugin.json patch version on content changes.
+# Replaces the GitHub Actions auto-bump workflow — bumps locally
+# so there's no remote race condition on push.
+
+PLUGIN_JSON=".claude-plugin/plugin.json"
+
+# Only run in plugin repos
+[ -f "$PLUGIN_JSON" ] || exit 0
+
+# Check if staged changes include files OTHER than plugin.json
+OTHER_CHANGES=$(git diff --cached --name-only | grep -v "^\.claude-plugin/plugin\.json$")
+
+# If only plugin.json changed (manual bump) or nothing else, skip
+[ -z "$OTHER_CHANGES" ] && exit 0
+
+# Bump patch version: 0.2.0 -> 0.2.1
+jq '.version |= (split(".") | .[2] = (.[2]|tonumber+1|tostring) | join("."))' \
+  "$PLUGIN_JSON" > "$PLUGIN_JSON.tmp" && mv "$PLUGIN_JSON.tmp" "$PLUGIN_JSON"
+
+git add "$PLUGIN_JSON"
