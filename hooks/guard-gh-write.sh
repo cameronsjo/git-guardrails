@@ -20,8 +20,8 @@ ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-}"
 ALLOWED_REPOS="${GIT_GUARDRAILS_ALLOWED_REPOS:-}"
 
 if [ -z "$ALLOWED_OWNERS" ]; then
-  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up"
-  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set."
+  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
+  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
   exit 2
 fi
 
@@ -56,8 +56,8 @@ repo_from_url() {
 
 has_loop=$(echo "$COMMAND" | grep -cE '\bfor\b|\bwhile\b' || true)
 if [ "$has_loop" -gt 0 ] && echo "$COMMAND" | grep -qE '\bgh\b'; then
-  echo "🚫 git-guardrails: gh command in loop — cannot verify targets"
-  echo "   Run each gh command individually."
+  echo "🚫 git-guardrails: gh command in loop — cannot verify targets" >&2
+  echo "   Run each gh command individually." >&2
   exit 2
 fi
 
@@ -125,12 +125,12 @@ if [ -z "$target_repo" ]; then
     upstream_repo=$(repo_from_url "$upstream_url")
     origin_url=$(git -C "$work_dir" remote get-url origin 2>/dev/null || echo "")
     origin_repo=$(repo_from_url "$origin_url")
-    echo "🚫 git-guardrails: Write operation in a fork — specify target with -R"
-    echo "   Fork:     $origin_repo"
-    echo "   Upstream: $upstream_repo"
-    echo ""
-    echo "   Use -R $origin_repo to target your fork"
-    echo "   Use -R $upstream_repo to target upstream (if intended)"
+    echo "🚫 git-guardrails: Write operation in a fork — specify target with -R" >&2
+    echo "   Fork:     $origin_repo" >&2
+    echo "   Upstream: $upstream_repo" >&2
+    echo "" >&2
+    echo "   Use -R $origin_repo to target your fork" >&2
+    echo "   Use -R $upstream_repo to target upstream (if intended)" >&2
     exit 2
   fi
 
@@ -142,20 +142,20 @@ if [ -z "$target_repo" ]; then
 fi
 
 if [ -z "$target_repo" ]; then
-  echo "⚠️  git-guardrails: Cannot determine target repo for gh write operation"
-  echo "   Use -R owner/repo to specify target explicitly."
+  echo "⚠️  git-guardrails: Cannot determine target repo for gh write operation" >&2
+  echo "   Use -R owner/repo to specify target explicitly." >&2
   exit 2
 fi
 
 # --- Check ownership ---
 
 if ! is_allowed "$target_repo"; then
-  echo "🚫 git-guardrails: gh write targets repo you don't own"
-  echo "   Target:  $target_repo"
-  echo "   Allowed: owners=[$ALLOWED_OWNERS] repos=[$ALLOWED_REPOS]"
-  echo ""
-  echo "   To override: add to GIT_GUARDRAILS_ALLOWED_REPOS"
-  echo "   Or specify:  -R owner/repo"
+  echo "🚫 git-guardrails: gh write targets repo you don't own" >&2
+  echo "   Target:  $target_repo" >&2
+  echo "   Allowed: owners=[$ALLOWED_OWNERS] repos=[$ALLOWED_REPOS]" >&2
+  echo "" >&2
+  echo "   To override: add to GIT_GUARDRAILS_ALLOWED_REPOS" >&2
+  echo "   Or specify:  -R owner/repo" >&2
   exit 2
 fi
 

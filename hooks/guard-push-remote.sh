@@ -17,8 +17,8 @@ echo "$COMMAND" | grep -qw 'git push' || exit 0
 ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-}"
 
 if [ -z "$ALLOWED_OWNERS" ]; then
-  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up"
-  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set."
+  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
+  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
   exit 2
 fi
 
@@ -59,8 +59,8 @@ push_count=$(echo "$COMMAND" | grep -ow 'git push' | wc -l | tr -d ' ')
 has_loop=$(echo "$COMMAND" | grep -cE '\bfor\b|\bwhile\b' || true)
 
 if [ "$push_count" -gt 1 ] || [ "$has_loop" -gt 0 ]; then
-  echo "🚫 git-guardrails: git push in batch/loop command — cannot verify targets"
-  echo "   Run each push individually so remotes can be validated."
+  echo "🚫 git-guardrails: git push in batch/loop command — cannot verify targets" >&2
+  echo "   Run each push individually so remotes can be validated." >&2
   exit 2
 fi
 
@@ -100,20 +100,20 @@ fi
 remote_url=$(resolve_push_url "$work_dir" "$explicit_remote" || echo "")
 
 if [ -z "$remote_url" ]; then
-  echo "⚠️  git-guardrails: Cannot resolve push target"
-  echo "   Directory: $work_dir"
-  echo "   Push explicitly: git push origin main"
+  echo "⚠️  git-guardrails: Cannot resolve push target" >&2
+  echo "   Directory: $work_dir" >&2
+  echo "   Push explicitly: git push origin main" >&2
   exit 2
 fi
 
 if ! check_owner "$remote_url"; then
-  echo "🚫 git-guardrails: Push target is not yours"
-  echo "   Would push to: $remote_url"
-  echo "   Directory:     $work_dir"
-  echo "   Allowed:       $ALLOWED_OWNERS"
-  echo ""
-  echo "   Fix tracking:  git branch -u origin/main"
-  echo "   Push explicit: git push origin main"
+  echo "🚫 git-guardrails: Push target is not yours" >&2
+  echo "   Would push to: $remote_url" >&2
+  echo "   Directory:     $work_dir" >&2
+  echo "   Allowed:       $ALLOWED_OWNERS" >&2
+  echo "" >&2
+  echo "   Fix tracking:  git branch -u origin/main" >&2
+  echo "   Push explicit: git push origin main" >&2
   exit 2
 fi
 
