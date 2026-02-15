@@ -110,12 +110,29 @@ if echo "$COMMAND" | grep -qE '(-R|--repo)\s+'; then
   target_repo=$(echo "$COMMAND" | grep -oE '(-R|--repo)\s+[^ ]+' | head -1 | awk '{print $2}')
 fi
 
-# 2. gh api with repos/OWNER/REPO anywhere in the command
+# 2. gh repo create <name> — repo name is the positional arg, not -R
+#    gh repo create doesn't support -R; the target is always the first
+#    non-flag argument after 'create'.
+if [ -z "$target_repo" ] && echo "$COMMAND" | grep -qE 'gh\s+repo\s+create\b'; then
+  after_create=$(echo "$COMMAND" | sed -nE 's/.*gh[[:space:]]+repo[[:space:]]+create[[:space:]]+(.*)/\1/p')
+  first_arg=$(echo "$after_create" | awk '{print $1}')
+  if [ -n "$first_arg" ] && [[ "$first_arg" != -* ]]; then
+    if echo "$first_arg" | grep -q '/'; then
+      target_repo="$first_arg"
+    else
+      # Bare name (e.g. "llm-comic") — prefix with first allowed owner
+      default_owner=$(echo "$ALLOWED_OWNERS" | awk '{print $1}')
+      target_repo="${default_owner}/${first_arg}"
+    fi
+  fi
+fi
+
+# 4. gh api with repos/OWNER/REPO anywhere in the command
 if [ -z "$target_repo" ] && echo "$COMMAND" | grep -qE 'gh\s+api\b.*/?repos/'; then
   target_repo=$(echo "$COMMAND" | grep -oE '/?repos/[^/]+/[^/ ]+' | head -1 | sed 's|^/\{0,1\}repos/||')
 fi
 
-# 3. Resolve from git remotes
+# 5. Resolve from git remotes
 if [ -z "$target_repo" ]; then
   # Fork detection: if upstream remote exists, gh CLI may resolve ANY write
   # operation to the parent repo (pr create targets parent, issue/release

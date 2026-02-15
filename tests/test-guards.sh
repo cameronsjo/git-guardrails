@@ -338,6 +338,44 @@ expect_allow \
   "gh api repos/$FORK_REPO_NAME/issues -f title=test" \
   "$OWN_REPO"
 
+# --- gh repo create (positional arg resolution) ---
+
+expect_allow \
+  "gh: 'gh repo create owner/repo' for own owner" \
+  "$GH_HOOK" \
+  "gh repo create $OWN_OWNER/new-repo --private" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh repo create' with --source and --push (full pattern)" \
+  "$GH_HOOK" \
+  "gh repo create $OWN_OWNER/llm-comic --private --description \"test\" --source /tmp/llm-comic --push" \
+  "$OWN_REPO"
+
+expect_block \
+  "gh: 'gh repo create' for unowned org" \
+  "$GH_HOOK" \
+  "gh repo create $UPSTREAM_OWNER/new-repo --private" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh repo create bare-name' defaults to own owner" \
+  "$GH_HOOK" \
+  "gh repo create new-repo --private" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh repo create owner/repo' from fork CWD (bypasses fork detection)" \
+  "$GH_HOOK" \
+  "gh repo create $OWN_OWNER/new-repo --private" \
+  "$FORK_REPO"
+
+expect_block \
+  "gh: 'gh repo create foreign/repo' from fork CWD" \
+  "$GH_HOOK" \
+  "gh repo create $UPSTREAM_OWNER/new-repo --private" \
+  "$FORK_REPO"
+
 # --- Non-fork own repo: writes should allow ---
 
 expect_allow \
