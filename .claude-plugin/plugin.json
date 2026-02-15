@@ -1,7 +1,6 @@
 {
   "name": "git-guardrails",
   "description": "Git safety hooks: block pushes and gh writes to repos you don't own, branch warnings, commit nudges",
-  "version": "0.2.7",
   "author": {
     "name": "cameronsjo"
   },
