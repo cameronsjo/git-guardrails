@@ -56,8 +56,10 @@ resolve_push_url() {
 # Can't statically resolve variable paths in loops. Block and require individual commands.
 
 push_count=$(echo "$COMMAND" | grep -ow 'git push' | wc -l | tr -d ' ')
-# Match shell loop syntax, not the English word "for" inside quoted strings.
-has_loop=$(echo "$COMMAND" | grep -cE '\bfor\s+\w+\s+in\b|\bwhile\b.*;\s*do\b' || true)
+# Strip quoted strings before checking — loop keywords in prose (commit messages)
+# are user data, not shell structure.
+command_structure=$(echo "$COMMAND" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+has_loop=$(echo "$command_structure" | grep -cE '\bfor\s+\w+\s+in\b|\bwhile\b.*;\s*do\b' || true)
 
 if [ "$push_count" -gt 1 ] || [ "$has_loop" -gt 0 ]; then
   echo "🚫 git-guardrails: git push in batch/loop command — cannot verify targets" >&2

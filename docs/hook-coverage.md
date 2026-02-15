@@ -28,19 +28,20 @@ more precise but brittle if gh adds subcommands.
 
 ### Loop Detection
 
-Matches shell loop syntax to block batch gh operations where targets can't be
-statically verified.
+Strips all quoted strings from the command before checking — loop keywords inside
+`--body`, `--title`, commit messages, etc. are user data, not shell structure. Then
+matches shell loop syntax on the remaining structure.
 
 | Scenario | Likelihood | Impact | Status |
 |----------|:----------:|:------:|:------:|
 | `for x in ...; do gh ...; done` | Medium | Correctly blocked | Covered |
 | `while read ...; do gh ...; done` | Low-Medium | Correctly blocked | Covered |
-| English "for" in `--title`/`--body` | High | Low (user overrides) | Fixed (2026-02-15) |
-| `for x in` as literal text in commit messages | Very low (requires gh-in-filename AND pattern-in-message) | Low | Known, acceptable |
+| Prose in `--title`/`--body`/`-m` (e.g. "for clarity in the suite") | High | None (stripped) | Fixed (2026-02-15) |
+| Loop keywords in heredoc inside `$(...)` | Very low | Stripped if within outer quotes | Acceptable |
 | `until ...; do` loops | Very low | Low | Not worth adding |
 
-**Pattern:** `\bfor\s+\w+\s+in\b` and `\bwhile\b.*;\s*do\b` — matches shell syntax,
-not English prose.
+**Approach:** Strip `"..."` and `'...'` content, then match `\bfor\s+\w+\s+in\b`
+and `\bwhile\b.*;\s*do\b` on the remaining shell structure.
 
 ### Write Detection
 

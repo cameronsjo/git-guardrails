@@ -236,11 +236,17 @@ expect_block \
   "cat repos.txt | while read repo; do cd \$repo && git push; done" \
   "$FORK_REPO"
 
-# Test: English "for" in commit message doesn't trigger loop detection
+# Regression: prose in commit messages must not trigger loop detection
 expect_allow \
-  "push: English 'for' in quoted arg is not a loop" \
+  "push: 'for WORD in' in commit message is not a loop" \
   "$PUSH_HOOK" \
-  "git push" \
+  "git commit -m \"Refactored for clarity in the test suite\" && git push" \
+  "$OWN_REPO"
+
+expect_allow \
+  "push: 'while; do' in commit message is not a loop" \
+  "$PUSH_HOOK" \
+  "git commit -m \"poll while idle; do not restart services\" && git push" \
   "$OWN_REPO"
 
 # Test: non-push command passthrough
@@ -446,7 +452,7 @@ expect_block \
   "cat repos.txt | while read repo; do gh issue create --title test -R \$repo; done" \
   "$OWN_REPO"
 
-# Regression: English "for" in quoted args must not trigger loop detection
+# Regression: prose in quoted args must not trigger loop detection
 expect_allow \
   "gh: 'gh issue create' with 'for' in --title" \
   "$GH_HOOK" \
@@ -457,6 +463,20 @@ expect_allow \
   "gh: 'gh issue create' with 'for' and 'while' in --body" \
   "$GH_HOOK" \
   "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"wait for results while polling\"" \
+  "$OWN_REPO"
+
+# Regression: 'for WORD in' pattern in --body (the exact false positive from the bug report)
+expect_allow \
+  "gh: 'gh pr create' with 'for clarity in' in --body" \
+  "$GH_HOOK" \
+  "gh pr create --title \"Fix tests\" --body \"Refactored the loop for clarity in the test suite\"" \
+  "$OWN_REPO"
+
+# Regression: 'while ...; do' pattern in --body
+expect_allow \
+  "gh: 'gh issue create' with 'while ...; do' in --body" \
+  "$GH_HOOK" \
+  "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"run the check while idle; do not restart\"" \
   "$OWN_REPO"
 
 echo ""
