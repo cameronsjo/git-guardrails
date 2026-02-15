@@ -229,6 +229,20 @@ expect_block \
   "for dir in a b; do cd /tmp/\$dir && git push; done" \
   "$FORK_REPO"
 
+# Test: while loop with pushes
+expect_block \
+  "push: while loop with git push" \
+  "$PUSH_HOOK" \
+  "cat repos.txt | while read repo; do cd \$repo && git push; done" \
+  "$FORK_REPO"
+
+# Test: English "for" in commit message doesn't trigger loop detection
+expect_allow \
+  "push: English 'for' in quoted arg is not a loop" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$OWN_REPO"
+
 # Test: non-push command passthrough
 expect_allow \
   "push: 'git status' passthrough" \
@@ -425,6 +439,25 @@ expect_block \
   "$GH_HOOK" \
   "for repo in a b; do cd /tmp/\$repo && gh issue create --title test; done" \
   "$FORK_REPO"
+
+expect_block \
+  "gh: while loop with gh commands" \
+  "$GH_HOOK" \
+  "cat repos.txt | while read repo; do gh issue create --title test -R \$repo; done" \
+  "$OWN_REPO"
+
+# Regression: English "for" in quoted args must not trigger loop detection
+expect_allow \
+  "gh: 'gh issue create' with 'for' in --title" \
+  "$GH_HOOK" \
+  "gh issue create --repo $OWN_OWNER/bosun --title \"feat: add endpoint for Homepage\"" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh issue create' with 'for' and 'while' in --body" \
+  "$GH_HOOK" \
+  "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"wait for results while polling\"" \
+  "$OWN_REPO"
 
 echo ""
 

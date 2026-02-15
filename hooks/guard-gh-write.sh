@@ -54,7 +54,9 @@ repo_from_url() {
 
 # --- Complexity gate ---
 
-has_loop=$(echo "$COMMAND" | grep -cE '\bfor\b|\bwhile\b' || true)
+# Match shell loop syntax, not the English word "for" inside quoted strings.
+# Shell for-loops: "for VAR in ..." / Shell while-loops: "while ...; do"
+has_loop=$(echo "$COMMAND" | grep -cE '\bfor\s+\w+\s+in\b|\bwhile\b.*;\s*do\b' || true)
 if [ "$has_loop" -gt 0 ] && echo "$COMMAND" | grep -qE '\bgh\b'; then
   echo "🚫 git-guardrails: gh command in loop — cannot verify targets" >&2
   echo "   Run each gh command individually." >&2
