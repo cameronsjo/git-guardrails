@@ -318,6 +318,14 @@ expect_allow \
   "gh issue create -R $FORK_REPO_NAME --title \"test\"" \
   "$FORK_REPO"
 
+# --- Fork repo: --repo long form ---
+
+expect_allow \
+  "gh: 'gh pr create --repo $FORK_REPO_NAME' (long form)" \
+  "$GH_HOOK" \
+  "gh pr create --repo $FORK_REPO_NAME --title \"test\"" \
+  "$FORK_REPO"
+
 # --- Fork repo: -R to upstream should block ---
 
 expect_block \
@@ -358,6 +366,18 @@ expect_allow \
   "gh api repos/$FORK_REPO_NAME/issues -f title=test" \
   "$OWN_REPO"
 
+expect_block \
+  "gh: 'gh api --method POST' to upstream (long form)" \
+  "$GH_HOOK" \
+  "gh api --method POST repos/$UPSTREAM_REPO_NAME/issues -f title=test" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh api --method GET' to upstream (explicit read)" \
+  "$GH_HOOK" \
+  "gh api --method GET repos/$UPSTREAM_REPO_NAME/pulls" \
+  "$OWN_REPO"
+
 # --- gh repo create (positional arg resolution) ---
 
 expect_allow \
@@ -396,6 +416,19 @@ expect_block \
   "gh repo create $UPSTREAM_OWNER/new-repo --private" \
   "$FORK_REPO"
 
+# --- ALLOWED_REPOS override ---
+
+_saved_repos="${GIT_GUARDRAILS_ALLOWED_REPOS:-}"
+export GIT_GUARDRAILS_ALLOWED_REPOS="$UPSTREAM_REPO_NAME"
+
+expect_allow \
+  "gh: ALLOWED_REPOS override lets upstream write through" \
+  "$GH_HOOK" \
+  "gh issue create -R $UPSTREAM_REPO_NAME --title \"test\"" \
+  "$OWN_REPO"
+
+export GIT_GUARDRAILS_ALLOWED_REPOS="$_saved_repos"
+
 # --- Non-fork own repo: writes should allow ---
 
 expect_allow \
@@ -408,6 +441,18 @@ expect_allow \
   "gh: 'gh pr create' in own (non-fork) repo" \
   "$GH_HOOK" \
   "gh pr create --title \"test\"" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh release create' in own (non-fork) repo" \
+  "$GH_HOOK" \
+  "gh release create v1.0.0" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh label create' in own (non-fork) repo" \
+  "$GH_HOOK" \
+  "gh label create bug --color FF0000" \
   "$OWN_REPO"
 
 # --- Read operations: always allow ---
