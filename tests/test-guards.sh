@@ -26,18 +26,28 @@ passed=0
 failed=0
 total=0
 
+# --- Helpers: URL parsing (same logic as the hooks) ---
+
+repo_from_url() {
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
+}
+
+owner_from_url() {
+  repo_from_url "$1" | cut -d/ -f1
+}
+
 # --- Detect owners from repo remotes ---
 
 own_origin_url=$(git -C "$OWN_REPO" remote get-url origin 2>/dev/null)
-OWN_OWNER=$(echo "$own_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
+OWN_OWNER=$(owner_from_url "$own_origin_url")
 
 fork_origin_url=$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null)
-FORK_OWNER=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-FORK_REPO_NAME=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+FORK_OWNER=$(owner_from_url "$fork_origin_url")
+FORK_REPO_NAME=$(repo_from_url "$fork_origin_url")
 
 fork_upstream_url=$(git -C "$FORK_REPO" remote get-url upstream 2>/dev/null)
-UPSTREAM_OWNER=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-UPSTREAM_REPO_NAME=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+UPSTREAM_OWNER=$(owner_from_url "$fork_upstream_url")
+UPSTREAM_REPO_NAME=$(repo_from_url "$fork_upstream_url")
 
 # Export for hooks — tests run as the repo owner
 export GIT_GUARDRAILS_ALLOWED_OWNERS="$OWN_OWNER"
@@ -146,9 +156,23 @@ expect_block \
   "$OWN_REPO"
 
 expect_block \
-  "unconfigured: gh hook blocks when ALLOWED_OWNERS unset" \
+  "unconfigured: gh hook blocks writes when ALLOWED_OWNERS unset" \
   "$GH_HOOK" \
   "gh issue create --title test" \
+  "$OWN_REPO"
+
+# Read-only gh commands pass through even when unconfigured
+# (needed for /guardrails-init to run `gh api user`)
+expect_allow \
+  "unconfigured: gh read-only command passes (gh api user)" \
+  "$GH_HOOK" \
+  "gh api user --jq .login" \
+  "$OWN_REPO"
+
+expect_allow \
+  "unconfigured: gh pr list passes (read-only)" \
+  "$GH_HOOK" \
+  "gh pr list" \
   "$OWN_REPO"
 
 # Non-push/non-gh commands still pass through
@@ -326,18 +350,26 @@ expect_allow \
   "gh pr create --repo $FORK_REPO_NAME --title \"test\"" \
   "$FORK_REPO"
 
-# --- Fork repo: -R to upstream should block ---
+# --- Fork repo: -R to upstream (fork-parent) should allow ---
 
-expect_block \
-  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME' (fork-parent)" \
   "$GH_HOOK" \
   "gh issue comment 42 -R $UPSTREAM_REPO_NAME -b \"test\"" \
   "$FORK_REPO"
 
-expect_block \
-  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME' (fork-parent)" \
   "$GH_HOOK" \
   "gh pr create -R $UPSTREAM_REPO_NAME --title \"test\"" \
+  "$FORK_REPO"
+
+# --- Fork repo: -R to unrelated repo should block ---
+
+expect_block \
+  "gh: 'gh pr create -R unrelated/repo' in fork" \
+  "$GH_HOOK" \
+  "gh pr create -R some-stranger/other-project --title \"test\"" \
   "$FORK_REPO"
 
 # --- gh api ---
@@ -523,6 +555,203 @@ expect_allow \
   "$GH_HOOK" \
   "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"run the check while idle; do not restart\"" \
   "$OWN_REPO"
+
+echo ""
+
+# ===================================================================
+# SSH port URLs (ssh://host:port/owner/repo.git)
+# ===================================================================
+
+echo "--- SSH port URLs ---"
+echo ""
+
+# Create temp repos with ssh:// port-format remotes
+SSH_PORT_OWN=$(mktemp -d)
+git init -q "$SSH_PORT_OWN"
+git -C "$SSH_PORT_OWN" remote add origin "ssh://git@github.com:22/$OWN_OWNER/own-repo.git"
+
+SSH_PORT_FORK=$(mktemp -d)
+git init -q "$SSH_PORT_FORK"
+git -C "$SSH_PORT_FORK" remote add origin "ssh://git@github.com:443/$OWN_OWNER/fork-repo.git"
+git -C "$SSH_PORT_FORK" remote add upstream "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/fork-repo.git"
+
+SSH_PORT_UNOWNED=$(mktemp -d)
+git init -q "$SSH_PORT_UNOWNED"
+git -C "$SSH_PORT_UNOWNED" remote add origin "ssh://git@github.com:22/$UPSTREAM_OWNER/their-repo.git"
+
+SSH_PORT_443=$(mktemp -d)
+git init -q "$SSH_PORT_443"
+git -C "$SSH_PORT_443" remote add origin "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via ssh:// port URLs ---
+
+# guard-push-remote: push in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: push allowed in own repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: write in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: gh issue create in own repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: -R to own fork via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R own fork (port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
+# --- Unhappy paths: blocks via ssh:// port URLs ---
+
+# guard-push-remote: push to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: push blocked to unowned repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-push-remote: push to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: push blocked to unowned repo (ssh.github.com:443)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: write to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-gh-write: write to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (ssh.github.com:443)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: fork detection works with ssh:// port URLs
+expect_block \
+  "ssh-port: gh pr create in fork (no -R, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$SSH_PORT_FORK"
+
+# guard-gh-write: -R to upstream (fork-parent) via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R upstream (fork-parent, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
+# Cleanup
+rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK" "$SSH_PORT_UNOWNED" "$SSH_PORT_443"
+
+echo ""
+
+# ===================================================================
+# GitHub Enterprise / custom host URLs
+# ===================================================================
+
+echo "--- GitHub Enterprise URLs ---"
+echo ""
+
+# Create temp repos with enterprise hostnames
+GHE_OWN_HTTPS=$(mktemp -d)
+git init -q "$GHE_OWN_HTTPS"
+git -C "$GHE_OWN_HTTPS" remote add origin "https://github.example.com/$OWN_OWNER/own-repo.git"
+
+GHE_OWN_SSH=$(mktemp -d)
+git init -q "$GHE_OWN_SSH"
+git -C "$GHE_OWN_SSH" remote add origin "git@github.example.com:$OWN_OWNER/own-repo.git"
+
+GHE_FORK=$(mktemp -d)
+git init -q "$GHE_FORK"
+git -C "$GHE_FORK" remote add origin "https://github.example.com/$OWN_OWNER/fork-repo.git"
+git -C "$GHE_FORK" remote add upstream "git@github.example.com:$UPSTREAM_OWNER/fork-repo.git"
+
+GHE_UNOWNED=$(mktemp -d)
+git init -q "$GHE_UNOWNED"
+git -C "$GHE_UNOWNED" remote add origin "https://github.example.com/$UPSTREAM_OWNER/their-repo.git"
+
+GHE_SSH_PORT=$(mktemp -d)
+git init -q "$GHE_SSH_PORT"
+git -C "$GHE_SSH_PORT" remote add origin "ssh://git@github.example.com:2222/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via enterprise URLs ---
+
+expect_allow \
+  "ghe: push allowed in own repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: push allowed in own repo (SSH)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_SSH"
+
+expect_allow \
+  "ghe: gh issue create in own repo (HTTPS)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: gh issue create in own repo (SSH)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_SSH"
+
+# --- Unhappy paths: blocks via enterprise URLs ---
+
+expect_block \
+  "ghe: push blocked to unowned repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_UNOWNED"
+
+expect_block \
+  "ghe: push blocked to unowned repo (SSH+port)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_SSH_PORT"
+
+expect_block \
+  "ghe: gh issue create blocked on unowned repo" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_UNOWNED"
+
+# --- Fork detection works with enterprise URLs ---
+
+expect_block \
+  "ghe: gh pr create in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R own fork" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R upstream (fork-parent)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+# Cleanup
+rm -rf "$GHE_OWN_HTTPS" "$GHE_OWN_SSH" "$GHE_FORK" "$GHE_UNOWNED" "$GHE_SSH_PORT"
 
 echo ""
 
