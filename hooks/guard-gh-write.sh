@@ -19,12 +19,6 @@ echo "$COMMAND" | grep -qE '\bgh\b' || exit 0
 ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-}"
 ALLOWED_REPOS="${GIT_GUARDRAILS_ALLOWED_REPOS:-}"
 
-if [ -z "$ALLOWED_OWNERS" ]; then
-  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
-  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
-  exit 2
-fi
-
 # --- Helpers ---
 
 is_allowed() {
@@ -86,6 +80,14 @@ fi
 
 # Not a write — allow
 $is_write || exit 0
+
+# Fail-safe: block writes when unconfigured (but read-only gh commands above pass through,
+# so /guardrails-init can run `gh api user` to detect identity).
+if [ -z "$ALLOWED_OWNERS" ]; then
+  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
+  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
+  exit 2
+fi
 
 # --- Parse working directory ---
 

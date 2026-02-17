@@ -146,9 +146,23 @@ expect_block \
   "$OWN_REPO"
 
 expect_block \
-  "unconfigured: gh hook blocks when ALLOWED_OWNERS unset" \
+  "unconfigured: gh hook blocks writes when ALLOWED_OWNERS unset" \
   "$GH_HOOK" \
   "gh issue create --title test" \
+  "$OWN_REPO"
+
+# Read-only gh commands pass through even when unconfigured
+# (needed for /guardrails-init to run `gh api user`)
+expect_allow \
+  "unconfigured: gh read-only command passes (gh api user)" \
+  "$GH_HOOK" \
+  "gh api user --jq .login" \
+  "$OWN_REPO"
+
+expect_allow \
+  "unconfigured: gh pr list passes (read-only)" \
+  "$GH_HOOK" \
+  "gh pr list" \
   "$OWN_REPO"
 
 # Non-push/non-gh commands still pass through
