@@ -24,11 +24,22 @@ fi
 
 # --- Helpers ---
 
+repo_from_url() {
+  # Normalize any git remote URL to owner/repo:
+  #   https://host/owner/repo.git  — strip scheme+host
+  #   git@host:owner/repo.git      — strip user@host:
+  #   ssh://user@host:port/owner/repo.git — strip scheme+userinfo+host+port
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
+}
+
 check_owner() {
   local url="$1"
-  for owner in $ALLOWED_OWNERS; do
-    # Match both HTTPS and SSH GitHub URLs
-    if echo "$url" | grep -qiE "github\.com[:/]([0-9]+/)?${owner}/"; then
+  local repo
+  repo=$(repo_from_url "$url")
+  local owner="${repo%%/*}"
+
+  for allowed in $ALLOWED_OWNERS; do
+    if [ "$owner" = "$allowed" ]; then
       return 0
     fi
   done

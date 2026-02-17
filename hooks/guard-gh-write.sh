@@ -43,7 +43,11 @@ is_allowed() {
 }
 
 repo_from_url() {
-  echo "$1" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p'
+  # Normalize any git remote URL to owner/repo:
+  #   https://host/owner/repo.git  — strip scheme+host
+  #   git@host:owner/repo.git      — strip user@host:
+  #   ssh://user@host:port/owner/repo.git — strip scheme+userinfo+host+port
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
 }
 
 # --- Complexity gate ---

@@ -26,18 +26,28 @@ passed=0
 failed=0
 total=0
 
+# --- Helpers: URL parsing (same logic as the hooks) ---
+
+repo_from_url() {
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
+}
+
+owner_from_url() {
+  repo_from_url "$1" | cut -d/ -f1
+}
+
 # --- Detect owners from repo remotes ---
 
 own_origin_url=$(git -C "$OWN_REPO" remote get-url origin 2>/dev/null)
-OWN_OWNER=$(echo "$own_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
+OWN_OWNER=$(owner_from_url "$own_origin_url")
 
 fork_origin_url=$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null)
-FORK_OWNER=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
-FORK_REPO_NAME=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p')
+FORK_OWNER=$(owner_from_url "$fork_origin_url")
+FORK_REPO_NAME=$(repo_from_url "$fork_origin_url")
 
 fork_upstream_url=$(git -C "$FORK_REPO" remote get-url upstream 2>/dev/null)
-UPSTREAM_OWNER=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
-UPSTREAM_REPO_NAME=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p')
+UPSTREAM_OWNER=$(owner_from_url "$fork_upstream_url")
+UPSTREAM_REPO_NAME=$(repo_from_url "$fork_upstream_url")
 
 # Export for hooks — tests run as the repo owner
 export GIT_GUARDRAILS_ALLOWED_OWNERS="$OWN_OWNER"
@@ -642,6 +652,106 @@ expect_allow \
 
 # Cleanup
 rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK" "$SSH_PORT_UNOWNED" "$SSH_PORT_443"
+
+echo ""
+
+# ===================================================================
+# GitHub Enterprise / custom host URLs
+# ===================================================================
+
+echo "--- GitHub Enterprise URLs ---"
+echo ""
+
+# Create temp repos with enterprise hostnames
+GHE_OWN_HTTPS=$(mktemp -d)
+git init -q "$GHE_OWN_HTTPS"
+git -C "$GHE_OWN_HTTPS" remote add origin "https://github.example.com/$OWN_OWNER/own-repo.git"
+
+GHE_OWN_SSH=$(mktemp -d)
+git init -q "$GHE_OWN_SSH"
+git -C "$GHE_OWN_SSH" remote add origin "git@github.example.com:$OWN_OWNER/own-repo.git"
+
+GHE_FORK=$(mktemp -d)
+git init -q "$GHE_FORK"
+git -C "$GHE_FORK" remote add origin "https://github.example.com/$OWN_OWNER/fork-repo.git"
+git -C "$GHE_FORK" remote add upstream "git@github.example.com:$UPSTREAM_OWNER/fork-repo.git"
+
+GHE_UNOWNED=$(mktemp -d)
+git init -q "$GHE_UNOWNED"
+git -C "$GHE_UNOWNED" remote add origin "https://github.example.com/$UPSTREAM_OWNER/their-repo.git"
+
+GHE_SSH_PORT=$(mktemp -d)
+git init -q "$GHE_SSH_PORT"
+git -C "$GHE_SSH_PORT" remote add origin "ssh://git@github.example.com:2222/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via enterprise URLs ---
+
+expect_allow \
+  "ghe: push allowed in own repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: push allowed in own repo (SSH)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_SSH"
+
+expect_allow \
+  "ghe: gh issue create in own repo (HTTPS)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: gh issue create in own repo (SSH)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_SSH"
+
+# --- Unhappy paths: blocks via enterprise URLs ---
+
+expect_block \
+  "ghe: push blocked to unowned repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_UNOWNED"
+
+expect_block \
+  "ghe: push blocked to unowned repo (SSH+port)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_SSH_PORT"
+
+expect_block \
+  "ghe: gh issue create blocked on unowned repo" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_UNOWNED"
+
+# --- Fork detection works with enterprise URLs ---
+
+expect_block \
+  "ghe: gh pr create in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R own fork" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R upstream (fork-parent)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+# Cleanup
+rm -rf "$GHE_OWN_HTTPS" "$GHE_OWN_SSH" "$GHE_FORK" "$GHE_UNOWNED" "$GHE_SSH_PORT"
 
 echo ""
 
