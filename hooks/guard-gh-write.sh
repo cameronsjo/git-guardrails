@@ -172,6 +172,18 @@ fi
 # --- Check ownership ---
 
 if ! is_allowed "$target_repo"; then
+  # Fork-parent: if the target matches the upstream remote, allow it.
+  # This covers the common case of contributing back to the parent repo
+  # (e.g. gh pr create -R upstream-owner/repo) without requiring manual
+  # ALLOWED_REPOS entries.
+  upstream_url=$(git -C "$work_dir" remote get-url upstream 2>/dev/null || echo "")
+  if [ -n "$upstream_url" ]; then
+    upstream_repo=$(repo_from_url "$upstream_url")
+    if [ "$target_repo" = "$upstream_repo" ]; then
+      exit 0
+    fi
+  fi
+
   echo "🚫 git-guardrails: gh write targets repo you don't own" >&2
   echo "   Target:  $target_repo" >&2
   echo "   Allowed: owners=[$ALLOWED_OWNERS] repos=[$ALLOWED_REPOS]" >&2

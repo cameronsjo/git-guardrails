@@ -340,18 +340,26 @@ expect_allow \
   "gh pr create --repo $FORK_REPO_NAME --title \"test\"" \
   "$FORK_REPO"
 
-# --- Fork repo: -R to upstream should block ---
+# --- Fork repo: -R to upstream (fork-parent) should allow ---
 
-expect_block \
-  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME' (fork-parent)" \
   "$GH_HOOK" \
   "gh issue comment 42 -R $UPSTREAM_REPO_NAME -b \"test\"" \
   "$FORK_REPO"
 
-expect_block \
-  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME' (fork-parent)" \
   "$GH_HOOK" \
   "gh pr create -R $UPSTREAM_REPO_NAME --title \"test\"" \
+  "$FORK_REPO"
+
+# --- Fork repo: -R to unrelated repo should block ---
+
+expect_block \
+  "gh: 'gh pr create -R unrelated/repo' in fork" \
+  "$GH_HOOK" \
+  "gh pr create -R some-stranger/other-project --title \"test\"" \
   "$FORK_REPO"
 
 # --- gh api ---
@@ -625,9 +633,9 @@ expect_block \
   "gh pr create --title test" \
   "$SSH_PORT_FORK"
 
-# guard-gh-write: -R to upstream in fork via ssh:// port URL
-expect_block \
-  "ssh-port: gh pr create -R upstream in fork (port 443)" \
+# guard-gh-write: -R to upstream (fork-parent) via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R upstream (fork-parent, port 443)" \
   "$GH_HOOK" \
   "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
   "$SSH_PORT_FORK"
