@@ -43,7 +43,7 @@ is_allowed() {
 }
 
 repo_from_url() {
-  echo "$1" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p'
+  echo "$1" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p'
 }
 
 # --- Complexity gate ---

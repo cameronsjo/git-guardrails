@@ -28,7 +28,7 @@ check_owner() {
   local url="$1"
   for owner in $ALLOWED_OWNERS; do
     # Match both HTTPS and SSH GitHub URLs
-    if echo "$url" | grep -qiE "github\.com[:/]${owner}/"; then
+    if echo "$url" | grep -qiE "github\.com[:/]([0-9]+/)?${owner}/"; then
       return 0
     fi
   done

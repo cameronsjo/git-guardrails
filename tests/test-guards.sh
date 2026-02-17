@@ -29,15 +29,15 @@ total=0
 # --- Detect owners from repo remotes ---
 
 own_origin_url=$(git -C "$OWN_REPO" remote get-url origin 2>/dev/null)
-OWN_OWNER=$(echo "$own_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
+OWN_OWNER=$(echo "$own_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
 
 fork_origin_url=$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null)
-FORK_OWNER=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-FORK_REPO_NAME=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+FORK_OWNER=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
+FORK_REPO_NAME=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p')
 
 fork_upstream_url=$(git -C "$FORK_REPO" remote get-url upstream 2>/dev/null)
-UPSTREAM_OWNER=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-UPSTREAM_REPO_NAME=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+UPSTREAM_OWNER=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+)/.*|\2|p')
+UPSTREAM_REPO_NAME=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([0-9]+/)?([^/]+/[^/.]+)(\.git)?$|\2|p')
 
 # Export for hooks — tests run as the repo owner
 export GIT_GUARDRAILS_ALLOWED_OWNERS="$OWN_OWNER"
@@ -537,6 +537,56 @@ expect_allow \
   "$GH_HOOK" \
   "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"run the check while idle; do not restart\"" \
   "$OWN_REPO"
+
+echo ""
+
+# ===================================================================
+# SSH port URLs (ssh://host:port/owner/repo.git)
+# ===================================================================
+
+echo "--- SSH port URLs ---"
+echo ""
+
+# Create temp repos with ssh:// port-format remotes
+SSH_PORT_OWN=$(mktemp -d)
+git init -q "$SSH_PORT_OWN"
+git -C "$SSH_PORT_OWN" remote add origin "ssh://git@github.com:22/$OWN_OWNER/own-repo.git"
+
+SSH_PORT_FORK=$(mktemp -d)
+git init -q "$SSH_PORT_FORK"
+git -C "$SSH_PORT_FORK" remote add origin "ssh://git@github.com:443/$OWN_OWNER/fork-repo.git"
+git -C "$SSH_PORT_FORK" remote add upstream "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/fork-repo.git"
+
+# guard-push-remote: push in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: push allowed in own repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: write in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: gh issue create in own repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: fork detection works with ssh:// port URLs
+expect_block \
+  "ssh-port: gh pr create in fork (no -R, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$SSH_PORT_FORK"
+
+# guard-gh-write: -R to own fork via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R own fork (port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
+# Cleanup
+rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK"
 
 echo ""
 
