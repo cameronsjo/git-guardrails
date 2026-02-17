@@ -557,6 +557,16 @@ git init -q "$SSH_PORT_FORK"
 git -C "$SSH_PORT_FORK" remote add origin "ssh://git@github.com:443/$OWN_OWNER/fork-repo.git"
 git -C "$SSH_PORT_FORK" remote add upstream "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/fork-repo.git"
 
+SSH_PORT_UNOWNED=$(mktemp -d)
+git init -q "$SSH_PORT_UNOWNED"
+git -C "$SSH_PORT_UNOWNED" remote add origin "ssh://git@github.com:22/$UPSTREAM_OWNER/their-repo.git"
+
+SSH_PORT_443=$(mktemp -d)
+git init -q "$SSH_PORT_443"
+git -C "$SSH_PORT_443" remote add origin "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via ssh:// port URLs ---
+
 # guard-push-remote: push in own repo via ssh:// port URL
 expect_allow \
   "ssh-port: push allowed in own repo (port 22)" \
@@ -571,13 +581,6 @@ expect_allow \
   "gh issue create --title test" \
   "$SSH_PORT_OWN"
 
-# guard-gh-write: fork detection works with ssh:// port URLs
-expect_block \
-  "ssh-port: gh pr create in fork (no -R, port 443)" \
-  "$GH_HOOK" \
-  "gh pr create --title test" \
-  "$SSH_PORT_FORK"
-
 # guard-gh-write: -R to own fork via ssh:// port URL
 expect_allow \
   "ssh-port: gh pr create -R own fork (port 443)" \
@@ -585,8 +588,52 @@ expect_allow \
   "gh pr create -R $OWN_OWNER/fork-repo --title test" \
   "$SSH_PORT_FORK"
 
+# --- Unhappy paths: blocks via ssh:// port URLs ---
+
+# guard-push-remote: push to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: push blocked to unowned repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-push-remote: push to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: push blocked to unowned repo (ssh.github.com:443)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: write to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-gh-write: write to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (ssh.github.com:443)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: fork detection works with ssh:// port URLs
+expect_block \
+  "ssh-port: gh pr create in fork (no -R, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$SSH_PORT_FORK"
+
+# guard-gh-write: -R to upstream in fork via ssh:// port URL
+expect_block \
+  "ssh-port: gh pr create -R upstream in fork (port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
 # Cleanup
-rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK"
+rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK" "$SSH_PORT_UNOWNED" "$SSH_PORT_443"
 
 echo ""
 
