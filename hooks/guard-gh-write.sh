@@ -79,8 +79,8 @@ fi
 is_write=false
 
 # gh <resource> <write-action>
-WRITE_ACTIONS="create|merge|close|comment|edit|delete|transfer|archive|rename|review|reopen|ready|lock|unlock"
-if echo "$COMMAND" | grep -qE "gh\s+(pr|issue|release|label|repo|gist)\s+(${WRITE_ACTIONS})"; then
+WRITE_ACTIONS="create|merge|close|comment|edit|delete|transfer|archive|rename|review|reopen|ready|lock|unlock|fork|run|enable|disable"
+if echo "$COMMAND" | grep -qE "gh\s+(pr|issue|release|label|repo|gist|workflow)\s+(${WRITE_ACTIONS})"; then
   is_write=true
 fi
 
@@ -94,23 +94,31 @@ if echo "$COMMAND" | grep -qE 'gh\s+api.*\s(-f\s|--field\s|-F\s|--raw-field\s)';
   is_write=true
 fi
 
+# gh api with --input flag (file body implies POST)
+if echo "$COMMAND" | grep -qE 'gh\s+api.*\s--input\s'; then
+  is_write=true
+fi
+
 # Not a write — allow
 $is_write || exit 0
+
+# Gists are user-scoped, not repo-scoped — no ownership to validate
+if echo "$COMMAND" | grep -qE 'gh\s+gist\s'; then
+  exit 0
+fi
 
 # --- Parse working directory ---
 
 work_dir="$(pwd)"
 
-if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-  cd_target=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+("([^"]*)"|([^ &;]+)).*/\2\3/p')
-  if [ -n "$cd_target" ]; then
-    if [[ "$cd_target" = /* ]]; then
-      work_dir="$cd_target"
-    elif [[ "$cd_target" = ~* ]]; then
-      work_dir="${cd_target/#\~/$HOME}"
-    else
-      work_dir="$(pwd)/$cd_target"
-    fi
+cd_target=$(echo "$COMMAND" | grep -oE '(^|&&|;|\|\|)\s*cd\s+("([^"]*)"|[^ &;|]+)' | tail -1 | sed -nE 's/.*cd[[:space:]]+("([^"]*)"|([^ &;|]+)).*/\2\3/p' || true)
+if [ -n "$cd_target" ]; then
+  if [[ "$cd_target" = /* ]]; then
+    work_dir="$cd_target"
+  elif [[ "$cd_target" = ~* ]]; then
+    work_dir="${cd_target/#\~/$HOME}"
+  else
+    work_dir="$(pwd)/$cd_target"
   fi
 fi
 
@@ -167,6 +175,10 @@ if [ -z "$target_repo" ]; then
   # Non-fork: resolve from origin
   origin_url=$(git -C "$work_dir" remote get-url origin 2>/dev/null || echo "")
   if [ -n "$origin_url" ]; then
+    # Non-GitHub origins can't be validated — allow through
+    if ! echo "$origin_url" | grep -qiE 'github\.com[:/]'; then
+      exit 0
+    fi
     target_repo=$(repo_from_url "$origin_url")
   fi
 fi

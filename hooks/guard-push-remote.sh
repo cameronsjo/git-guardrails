@@ -26,8 +26,11 @@ fi
 
 check_owner() {
   local url="$1"
+  # Only validate GitHub URLs — non-GitHub hosts pass through (can't verify ownership)
+  if ! echo "$url" | grep -qiE 'github\.com[:/]'; then
+    return 0
+  fi
   for owner in $ALLOWED_OWNERS; do
-    # Match both HTTPS and SSH GitHub URLs
     if echo "$url" | grep -qiE "github\.com[:/]${owner}/"; then
       return 0
     fi
@@ -70,17 +73,15 @@ fi
 # --- Parse working directory ---
 work_dir="$(pwd)"
 
-# Extract cd target from "cd DIR && ..." or "cd DIR ; ..."
-if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-  cd_target=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+("([^"]*)"|([^ &;]+)).*/\2\3/p')
-  if [ -n "$cd_target" ]; then
-    if [[ "$cd_target" = /* ]]; then
-      work_dir="$cd_target"
-    elif [[ "$cd_target" = ~* ]]; then
-      work_dir="${cd_target/#\~/$HOME}"
-    else
-      work_dir="$(pwd)/$cd_target"
-    fi
+# Extract cd target from command chain — find the last cd before the push
+cd_target=$(echo "$COMMAND" | grep -oE '(^|&&|;|\|\|)\s*cd\s+("([^"]*)"|[^ &;|]+)' | tail -1 | sed -nE 's/.*cd[[:space:]]+("([^"]*)"|([^ &;|]+)).*/\2\3/p' || true)
+if [ -n "$cd_target" ]; then
+  if [[ "$cd_target" = /* ]]; then
+    work_dir="$cd_target"
+  elif [[ "$cd_target" = ~* ]]; then
+    work_dir="${cd_target/#\~/$HOME}"
+  else
+    work_dir="$(pwd)/$cd_target"
   fi
 fi
 

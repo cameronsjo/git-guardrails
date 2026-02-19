@@ -263,6 +263,62 @@ expect_allow \
   "git push" \
   "$OWN_REPO"
 
+# Test: cd mid-chain before git push
+expect_allow \
+  "push: 'git add && cd DIR && git push' (mid-chain cd)" \
+  "$PUSH_HOOK" \
+  "git add . && cd $OWN_REPO && git push" \
+  "/tmp"
+
+# Test: push with --force flag
+expect_allow \
+  "push: 'git push --force origin main' to own remote" \
+  "$PUSH_HOOK" \
+  "git push --force origin main" \
+  "$OWN_REPO"
+
+# Test: push with --tags flag
+expect_allow \
+  "push: 'git push --tags' to own remote" \
+  "$PUSH_HOOK" \
+  "git push --tags" \
+  "$OWN_REPO"
+
+# Test: push with --delete flag
+expect_allow \
+  "push: 'git push --delete origin feature' to own remote" \
+  "$PUSH_HOOK" \
+  "git push --delete origin feature" \
+  "$OWN_REPO"
+
+# Test: push with --force-with-lease
+expect_allow \
+  "push: 'git push --force-with-lease origin main'" \
+  "$PUSH_HOOK" \
+  "git push --force-with-lease origin main" \
+  "$OWN_REPO"
+
+# Test: push with refspec
+expect_allow \
+  "push: 'git push origin HEAD:refs/heads/feature'" \
+  "$PUSH_HOOK" \
+  "git push origin HEAD:refs/heads/feature" \
+  "$OWN_REPO"
+
+# Test: push with delete refspec
+expect_allow \
+  "push: 'git push origin :refs/heads/feature' (delete refspec)" \
+  "$PUSH_HOOK" \
+  "git push origin :refs/heads/feature" \
+  "$OWN_REPO"
+
+# Test: push with --set-upstream
+expect_allow \
+  "push: 'git push --set-upstream origin feature'" \
+  "$PUSH_HOOK" \
+  "git push --set-upstream origin feature" \
+  "$OWN_REPO"
+
 echo ""
 
 # ===================================================================
@@ -529,6 +585,420 @@ expect_allow \
   "$GH_HOOK" \
   "gh issue create --repo $OWN_OWNER/bosun --title \"test\" --body \"run the check while idle; do not restart\"" \
   "$OWN_REPO"
+
+# --- Gist commands: should pass through (user-scoped, not repo-scoped) ---
+
+expect_allow \
+  "gh: 'gh gist create' passes through (user-scoped)" \
+  "$GH_HOOK" \
+  "gh gist create foo.txt" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh gist create' passes through from fork CWD" \
+  "$GH_HOOK" \
+  "gh gist create --public foo.txt" \
+  "$FORK_REPO"
+
+expect_allow \
+  "gh: 'gh gist edit' passes through (user-scoped)" \
+  "$GH_HOOK" \
+  "gh gist edit abc123" \
+  "$OWN_REPO"
+
+# --- gh api --input (implicit POST detection) ---
+
+expect_block \
+  "gh: 'gh api --input' to upstream (implicit POST)" \
+  "$GH_HOOK" \
+  "gh api repos/$UPSTREAM_REPO_NAME/issues --input body.json" \
+  "$OWN_REPO"
+
+expect_allow \
+  "gh: 'gh api --input' to own repo (implicit POST)" \
+  "$GH_HOOK" \
+  "gh api repos/$FORK_REPO_NAME/issues --input body.json" \
+  "$OWN_REPO"
+
+# --- gh workflow run/enable/disable ---
+
+expect_block \
+  "gh: 'gh workflow run' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh workflow run ci.yml" \
+  "$FORK_REPO"
+
+expect_allow \
+  "gh: 'gh workflow run -R own-repo'" \
+  "$GH_HOOK" \
+  "gh workflow run ci.yml -R $FORK_REPO_NAME" \
+  "$FORK_REPO"
+
+# --- gh repo fork ---
+
+expect_block \
+  "gh: 'gh repo fork' in fork CWD (no -R)" \
+  "$GH_HOOK" \
+  "gh repo fork $UPSTREAM_REPO_NAME" \
+  "$FORK_REPO"
+
+# --- gh pr merge (in WRITE_ACTIONS but untested) ---
+
+expect_block \
+  "gh: 'gh pr merge' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr merge 42 --merge" \
+  "$FORK_REPO"
+
+expect_allow \
+  "gh: 'gh pr merge -R own-fork'" \
+  "$GH_HOOK" \
+  "gh pr merge 42 --merge -R $FORK_REPO_NAME" \
+  "$FORK_REPO"
+
+# --- gh pr review (in WRITE_ACTIONS but untested) ---
+
+expect_block \
+  "gh: 'gh pr review' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr review 42 --approve" \
+  "$FORK_REPO"
+
+# --- gh repo archive/rename/delete (in WRITE_ACTIONS but untested) ---
+
+expect_allow \
+  "gh: 'gh repo archive' for own repo" \
+  "$GH_HOOK" \
+  "gh repo archive -R $FORK_REPO_NAME" \
+  "$OWN_REPO"
+
+expect_block \
+  "gh: 'gh repo rename' for upstream (blocked)" \
+  "$GH_HOOK" \
+  "gh repo rename -R $UPSTREAM_REPO_NAME new-name" \
+  "$OWN_REPO"
+
+# --- cd mid-chain for gh hook ---
+
+expect_allow \
+  "gh: 'git add && cd DIR && gh issue create' (mid-chain cd)" \
+  "$GH_HOOK" \
+  "git add . && cd $OWN_REPO && gh issue create --title test" \
+  "/tmp"
+
+echo ""
+
+# ===================================================================
+# warn-main-branch.sh
+# ===================================================================
+
+echo "--- warn-main-branch.sh ---"
+echo ""
+
+WARN_HOOK="$HOOKS_DIR/warn-main-branch.sh"
+
+# Create a temporary git repo for warn tests
+warn_tmp=$(mktemp -d)
+git -C "$warn_tmp" init -b main --quiet
+git -C "$warn_tmp" commit --allow-empty -m "init" --quiet
+
+# Compute the marker path using the same method as the hook:
+# git rev-parse --show-toplevel (canonical path) + PPID of test shell
+warn_repo_root=$(git -C "$warn_tmp" rev-parse --show-toplevel 2>/dev/null)
+warn_hash=$(echo "$warn_repo_root" | (md5 -q 2>/dev/null || md5sum | cut -d' ' -f1))
+[ -z "$warn_hash" ] && warn_hash=$(echo "$warn_repo_root" | cksum | cut -d' ' -f1)
+warn_marker="/tmp/.claude-main-branch-warned-${warn_hash}-$$"
+rm -f "$warn_marker"
+
+# Test: warns on main branch
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "editing files directly on"; then
+  echo "  PASS  warn: emits warning on main branch"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: emits warning on main branch"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: second call is suppressed (marker exists from previous call)
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  warn: second call suppressed by marker"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: second call suppressed by marker (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: warns again after marker removed
+rm -f "$warn_marker"
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "editing files directly on"; then
+  echo "  PASS  warn: warns again after marker removed"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: warns again after marker removed"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+rm -f "$warn_marker"
+
+# Test: silent on feature branch
+git -C "$warn_tmp" checkout -b feature/test --quiet
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  warn: silent on feature branch"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: silent on feature branch (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: warns on master branch
+git -C "$warn_tmp" checkout -b master --quiet
+rm -f "$warn_marker"
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "editing files directly on"; then
+  echo "  PASS  warn: warns on master branch"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: warns on master branch"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+rm -f "$warn_marker"
+
+# Test: silent in detached HEAD
+git -C "$warn_tmp" checkout --detach --quiet
+output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  warn: silent in detached HEAD"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: silent in detached HEAD (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: silent outside git repo
+output=$(cd /tmp && bash "$WARN_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  warn: silent outside git repo"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: silent outside git repo (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: always exits 0 (advisory, never blocks)
+rm -f "$warn_marker"
+git -C "$warn_tmp" checkout main --quiet
+(cd "$warn_tmp" && bash "$WARN_HOOK") >/dev/null 2>&1
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  warn: always exits 0"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  warn: always exits 0 (got exit $exit_code)"
+  failed=$((failed + 1))
+fi
+
+# Cleanup temp repo and markers
+rm -rf "$warn_tmp"
+rm -f "$warn_marker"
+
+echo ""
+
+# ===================================================================
+# check-idle-return.sh
+# ===================================================================
+
+echo "--- check-idle-return.sh ---"
+echo ""
+
+IDLE_HOOK="$HOOKS_DIR/check-idle-return.sh"
+
+# Derive the marker path the same way the hook does:
+# git rev-parse --show-toplevel from OWN_REPO (no path discrepancy on non-tmpfs dirs)
+idle_repo_root=$(git -C "$OWN_REPO" rev-parse --show-toplevel 2>/dev/null)
+idle_hash=$(echo "$idle_repo_root" | (md5 -q 2>/dev/null || md5sum | cut -d' ' -f1))
+[ -z "$idle_hash" ] && idle_hash=$(echo "$idle_repo_root" | cksum | cut -d' ' -f1)
+idle_marker="/tmp/.claude-last-edit-${idle_hash}"
+
+# Test: first edit — no nudge, no marker previously
+rm -f "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  idle: first edit in session — no nudge"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: first edit in session — no nudge (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: recent edit (1 minute ago) — no nudge
+echo $(($(date +%s) - 60)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  idle: recent edit (60s ago) — no nudge"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: recent edit (60s ago) — no nudge (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: stale edit (400s ago) — nudge fires
+echo $(($(date +%s) - 400)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "since your last edit"; then
+  echo "  PASS  idle: stale edit (400s ago) — nudge fires"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: stale edit (400s ago) — nudge fires"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: exactly 300s — nudge fires (>= 300)
+echo $(($(date +%s) - 300)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "since your last edit"; then
+  echo "  PASS  idle: exactly 300s — nudge fires (>= boundary)"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: exactly 300s — nudge fires (>= boundary)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: 299s — no nudge (below threshold)
+echo $(($(date +%s) - 299)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  idle: 299s — no nudge (below threshold)"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: 299s — no nudge (below threshold)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: cross-session stale marker (24h ago) — no nudge (capped at 8h)
+echo $(($(date +%s) - 86400)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  idle: cross-session marker (24h ago) — no nudge (8h cap)"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: cross-session marker (24h ago) — no nudge (8h cap)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: 28799s (just under 8h cap) — nudge fires
+echo $(($(date +%s) - 28799)) > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if echo "$output" | grep -q "since your last edit"; then
+  echo "  PASS  idle: 28799s (just under 8h cap) — nudge fires"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: 28799s (just under 8h cap) — nudge fires"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: corrupted marker (non-numeric) — no crash, no nudge
+echo "garbage" > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ] && [ -z "$output" ]; then
+  echo "  PASS  idle: corrupted marker (non-numeric) — no crash"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: corrupted marker (non-numeric) — got exit $exit_code"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: empty marker file — no crash, no nudge
+> "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ] && [ -z "$output" ]; then
+  echo "  PASS  idle: empty marker file — no crash"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: empty marker file — got exit $exit_code"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: marker updated after run
+echo $(($(date +%s) - 60)) > "$idle_marker"
+(cd "$OWN_REPO" && bash "$IDLE_HOOK") >/dev/null 2>&1
+new_ts=$(cat "$idle_marker")
+now=$(date +%s)
+diff=$((now - new_ts))
+total=$((total + 1))
+if [ "$diff" -le 2 ]; then
+  echo "  PASS  idle: marker updated with current timestamp after run"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: marker not updated (diff=${diff}s)"
+  failed=$((failed + 1))
+fi
+
+# Test: not in git repo — no output
+rm -f "$idle_marker"
+output=$(cd /tmp && bash "$IDLE_HOOK" 2>&1)
+total=$((total + 1))
+if [ -z "$output" ]; then
+  echo "  PASS  idle: silent outside git repo"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: silent outside git repo (got output)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: always exits 0 (advisory, never blocks)
+echo "garbage" > "$idle_marker"
+(cd "$OWN_REPO" && bash "$IDLE_HOOK") >/dev/null 2>&1
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  idle: always exits 0 (even with corrupted marker)"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: always exits 0 (got exit $exit_code)"
+  failed=$((failed + 1))
+fi
+
+# Cleanup
+rm -f "$idle_marker"
 
 echo ""
 
