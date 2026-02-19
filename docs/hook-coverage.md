@@ -81,6 +81,7 @@ Priority chain: explicit `-R` flag > `gh repo create` positional arg > `gh api` 
 |----------|:----------:|:------:|:------:|
 | Own user repos | High | Allowed | Covered |
 | Allowed repos override (`ALLOWED_REPOS`) | Low | Allowed | Covered |
+| Fork-parent repo (explicit `-R` from fork CWD) | High | Allowed | Covered |
 | Unowned org repos | Medium | Blocked | Covered |
 | Case mismatch in owner names | Very low (GitHub normalizes to lowercase) | False positive | Not worth fixing |
 | Repo transferred to new owner | Very low | Stale remote (also needs `git remote` update) | Acceptable |

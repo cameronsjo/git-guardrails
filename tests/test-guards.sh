@@ -328,16 +328,22 @@ expect_allow \
 
 # --- Fork repo: -R to upstream should block ---
 
-expect_block \
-  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME' (fork-parent allowed)" \
   "$GH_HOOK" \
   "gh issue comment 42 -R $UPSTREAM_REPO_NAME -b \"test\"" \
   "$FORK_REPO"
 
-expect_block \
-  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME'" \
+expect_allow \
+  "gh: 'gh pr create -R $UPSTREAM_REPO_NAME' (fork-parent allowed)" \
   "$GH_HOOK" \
   "gh pr create -R $UPSTREAM_REPO_NAME --title \"test\"" \
+  "$FORK_REPO"
+
+expect_block \
+  "gh: unrelated unowned repo still blocked from fork" \
+  "$GH_HOOK" \
+  "gh pr create -R someoneelse/other-repo --title \"test\"" \
   "$FORK_REPO"
 
 # --- gh api ---

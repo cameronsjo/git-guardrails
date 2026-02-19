@@ -52,6 +52,16 @@ repo_from_url() {
   echo "$1" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p'
 }
 
+is_fork_parent() {
+  local target="$1" dir="$2"
+  local upstream_url
+  upstream_url=$(git -C "$dir" remote get-url upstream 2>/dev/null || echo "")
+  [ -z "$upstream_url" ] && return 1
+  local upstream_repo
+  upstream_repo=$(repo_from_url "$upstream_url")
+  [ "$target" = "$upstream_repo" ]
+}
+
 # --- Complexity gate ---
 
 # Strip quoted strings before checking — loop keywords in prose (--body, --title,
@@ -170,13 +180,15 @@ fi
 # --- Check ownership ---
 
 if ! is_allowed "$target_repo"; then
-  echo "🚫 git-guardrails: gh write targets repo you don't own" >&2
-  echo "   Target:  $target_repo" >&2
-  echo "   Allowed: owners=[$ALLOWED_OWNERS] repos=[$ALLOWED_REPOS]" >&2
-  echo "" >&2
-  echo "   To override: add to GIT_GUARDRAILS_ALLOWED_REPOS" >&2
-  echo "   Or specify:  -R owner/repo" >&2
-  exit 2
+  if ! is_fork_parent "$target_repo" "$work_dir"; then
+    echo "🚫 git-guardrails: gh write targets repo you don't own" >&2
+    echo "   Target:  $target_repo" >&2
+    echo "   Allowed: owners=[$ALLOWED_OWNERS] repos=[$ALLOWED_REPOS]" >&2
+    echo "" >&2
+    echo "   To override: add to GIT_GUARDRAILS_ALLOWED_REPOS" >&2
+    echo "   Or specify:  -R owner/repo" >&2
+    exit 2
+  fi
 fi
 
 exit 0
