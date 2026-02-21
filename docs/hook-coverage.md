@@ -1,7 +1,7 @@
 # Hook Coverage Analysis
 
-> Last reviewed: 2026-02-15
-> Test suite: `tests/test-guards.sh` (44 tests)
+> Last reviewed: 2026-02-19
+> Test suite: `tests/test-guards.sh` (117 tests)
 
 ## Design Philosophy
 
@@ -55,6 +55,10 @@ The `WRITE_ACTIONS` list covers: `create`, `merge`, `close`, `comment`, `edit`, 
 | `gh api` with `-f`/`-F` (implicit POST) | Medium | Correctly detected | Covered |
 | `gh api` GET (read-only) | High | Correctly allowed | Covered |
 | `gh pr view`, `gh issue list` (reads) | High | Correctly allowed | Covered |
+| `gh api` with `--input` flag (file body) | Medium | Correctly detected | Fixed (2026-02-19) |
+| `gh workflow run/enable/disable` | Low | Correctly detected | Fixed (2026-02-19) |
+| `gh repo fork` | Low | Correctly detected | Fixed (2026-02-19) |
+| `gh gist create/edit/delete` | Medium | Allowed through (user-scoped) | Fixed (2026-02-19) |
 | Future gh subcommands not in list | Low | False negative (goes through) | Acceptable — gh CLI has its own auth |
 
 **Decision:** Action list is comprehensive. No gaps worth closing.
@@ -72,7 +76,8 @@ Priority chain: explicit `-R` flag > `gh repo create` positional arg > `gh api` 
 | `gh api repos/owner/repo/...` | Medium | Correctly resolved | Covered |
 | CWD is a fork (upstream remote) | High | Forces `-R` to disambiguate | Covered |
 | CWD is own repo (origin only) | High | Resolved from origin | Covered |
-| CWD has no git remotes | Low | False positive (blocks) | Acceptable |
+| CWD has no git remotes | Low | False positive (blocks) | Acceptable — blocks with guidance |
+| Non-GitHub origin URL (GitLab, Bitbucket, etc.) | Low | Allowed through (can't verify) | Fixed (2026-02-19) |
 | Origin URL uses SSH vs HTTPS | Medium | `repo_from_url` handles both | Covered |
 
 ### Ownership Check
@@ -98,21 +103,53 @@ Priority chain: explicit `-R` flag > `gh repo create` positional arg > `gh api` 
 | Multiple pushes in one command | Low | Blocked (complexity gate) | Covered |
 | Loop with pushes | Low | Blocked (complexity gate) | Covered |
 | Non-push git commands | Every other git call | Correctly allowed (exit 0) | Covered |
+| `cd` mid-chain (`git add && cd /path && git push`) | Medium | Correctly resolved (last cd in chain) | Fixed (2026-02-19) |
+| Non-GitHub remote URL (GitLab, etc.) | Low-Medium | Allowed through (can't verify) | Fixed (2026-02-19) |
+| Push with `--force`, `--tags`, `--delete`, refspecs | Medium | Correctly handled | Covered |
 
 ## Accepted Gaps
 
 These are known scenarios we intentionally do not cover:
 
-1. **`gh` in filenames triggering quick-exit** — Only matters when combined with another
-   false positive. Fixing requires enumerating all gh subcommands, which is more brittle
-   than the current approach.
+1. **`gh` in filenames triggering quick-exit** — Benign due to defense-in-depth (write
+   detection is the real gate).
 
 2. **`gh repo create` with flags before positional arg** — Non-standard arg ordering.
    Very unlikely in practice. User overrides.
 
-3. **No git remotes in CWD** — Unusual for Claude Code sessions. User overrides.
+3. **No git remotes in CWD** — Unusual for Claude Code sessions. Blocks with guidance.
 
 4. **`until` loops** — Claude almost never generates these. User overrides.
 
 5. **Case-sensitive owner matching** — GitHub normalizes owners to lowercase. Not a
    real-world issue.
+
+6. **`pushd`/`popd` not recognized as directory changes** — `cd` only.
+
+7. **Variables in `cd` paths (`cd "$HOME/..."`) not expanded** — Static parsing only.
+
+8. **`gh api` to non-repo endpoints (`user/repos`, `orgs/*/repos`)** — Write detected
+   but repo resolution fails with guidance.
+
+## warn-main-branch.sh
+
+| Scenario | Likelihood | Impact | Status |
+|----------|:----------:|:------:|:------:|
+| On `main` or `master` branch | High | Correctly warns once per session | Covered |
+| On feature branch | High | Silent (exit 0) | Covered |
+| Detached HEAD | Medium | Silent (exit 0) | Covered |
+| Not in git repo | Low | Silent (exit 0) | Covered |
+| Stale marker from previous session | Medium | Prevented by PPID scoping | Fixed (2026-02-19) |
+| Empty hash (no md5/md5sum) | Very low | cksum fallback | Fixed (2026-02-19) |
+
+## check-idle-return.sh
+
+| Scenario | Likelihood | Impact | Status |
+|----------|:----------:|:------:|:------:|
+| Gap < 5 minutes | High | No nudge | Covered |
+| Gap 5min–8hr | Medium | Nudge fires | Covered |
+| Gap > 8 hours (cross-session stale marker) | Medium | No nudge (treated as new session) | Fixed (2026-02-19) |
+| Corrupted/empty marker file | Low | Gracefully ignored, marker reset | Fixed (2026-02-19) |
+| First edit in session (no marker) | High | No nudge, marker created | Covered |
+| Not in git repo | Low | Silent (exit 0) | Covered |
+| Exactly 300s boundary | Low | Nudge fires (>= 300) | Fixed (2026-02-19) |
