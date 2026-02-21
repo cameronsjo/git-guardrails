@@ -1243,6 +1243,407 @@ rm -rf "$GHE_OWN_HTTPS" "$GHE_OWN_SSH" "$GHE_FORK" "$GHE_UNOWNED" "$GHE_SSH_PORT
 echo ""
 
 # ===================================================================
+# Malformed / unexpected input
+# ===================================================================
+
+echo "--- malformed input ---"
+echo ""
+
+# Test: completely empty input (no JSON at all)
+total=$((total + 1))
+set +e
+output=$(echo "" | (cd "$OWN_REPO" && bash "$PUSH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: push hook handles empty input gracefully"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: push hook handles empty input (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+total=$((total + 1))
+set +e
+output=$(echo "" | (cd "$OWN_REPO" && bash "$GH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: gh hook handles empty input gracefully"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: gh hook handles empty input (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: valid JSON but missing command field
+total=$((total + 1))
+set +e
+output=$(echo '{"tool_name":"Bash","tool_input":{}}' | (cd "$OWN_REPO" && bash "$PUSH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: push hook handles missing command field"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: push hook handles missing command field (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+total=$((total + 1))
+set +e
+output=$(echo '{"tool_name":"Bash","tool_input":{}}' | (cd "$OWN_REPO" && bash "$GH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: gh hook handles missing command field"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: gh hook handles missing command field (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: invalid JSON (jq will fail)
+total=$((total + 1))
+set +e
+output=$(echo 'not json at all' | (cd "$OWN_REPO" && bash "$PUSH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: push hook handles invalid JSON gracefully"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: push hook handles invalid JSON (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+total=$((total + 1))
+set +e
+output=$(echo 'not json at all' | (cd "$OWN_REPO" && bash "$GH_HOOK" 2>&1))
+exit_code=$?
+set -e
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  malformed: gh hook handles invalid JSON gracefully"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  malformed: gh hook handles invalid JSON (exit $exit_code)"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+echo ""
+
+# ===================================================================
+# Multiple ALLOWED_OWNERS
+# ===================================================================
+
+echo "--- multiple ALLOWED_OWNERS ---"
+echo ""
+
+# Create temp repos for multi-owner tests
+MULTI_UPSTREAM_REPO=$(mktemp -d)
+git init -q "$MULTI_UPSTREAM_REPO"
+git -C "$MULTI_UPSTREAM_REPO" remote add origin "https://github.com/$UPSTREAM_OWNER/their-repo.git"
+
+MULTI_UNKNOWN_REPO=$(mktemp -d)
+git init -q "$MULTI_UNKNOWN_REPO"
+git -C "$MULTI_UNKNOWN_REPO" remote add origin "https://github.com/totallyunknown/some-repo.git"
+
+# Test with space-separated list of multiple owners
+_saved_owners="$GIT_GUARDRAILS_ALLOWED_OWNERS"
+export GIT_GUARDRAILS_ALLOWED_OWNERS="$OWN_OWNER $UPSTREAM_OWNER"
+
+# First owner in list should still work
+expect_allow \
+  "multi-owner: push allowed for first owner" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$OWN_REPO"
+
+# Second owner should also be allowed now
+expect_allow \
+  "multi-owner: push allowed for second owner" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$MULTI_UPSTREAM_REPO"
+
+# gh write to second owner should also be allowed
+expect_allow \
+  "multi-owner: gh issue create allowed for second owner" \
+  "$GH_HOOK" \
+  "gh issue create -R $UPSTREAM_REPO_NAME --title test" \
+  "$OWN_REPO"
+
+# Unrelated third owner should still be blocked
+expect_block \
+  "multi-owner: push to unknown owner still blocked" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$MULTI_UNKNOWN_REPO"
+
+# gh write to unrelated third owner still blocked
+expect_block \
+  "multi-owner: gh write to unknown owner still blocked" \
+  "$GH_HOOK" \
+  "gh issue create -R totallyunknown/some-repo --title test" \
+  "$OWN_REPO"
+
+export GIT_GUARDRAILS_ALLOWED_OWNERS="$_saved_owners"
+rm -rf "$MULTI_UPSTREAM_REPO" "$MULTI_UNKNOWN_REPO"
+
+echo ""
+
+# ===================================================================
+# Additional WRITE_ACTIONS coverage
+# ===================================================================
+
+echo "--- additional WRITE_ACTIONS ---"
+echo ""
+
+# workflow enable/disable
+expect_block \
+  "write-actions: 'gh workflow enable' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh workflow enable ci.yml" \
+  "$FORK_REPO"
+
+expect_block \
+  "write-actions: 'gh workflow disable' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh workflow disable ci.yml" \
+  "$FORK_REPO"
+
+expect_allow \
+  "write-actions: 'gh workflow enable -R own'" \
+  "$GH_HOOK" \
+  "gh workflow enable ci.yml -R $FORK_REPO_NAME" \
+  "$FORK_REPO"
+
+# repo delete
+expect_block \
+  "write-actions: 'gh repo delete' for upstream" \
+  "$GH_HOOK" \
+  "gh repo delete -R $UPSTREAM_REPO_NAME --yes" \
+  "$OWN_REPO"
+
+expect_allow \
+  "write-actions: 'gh repo delete' for own repo" \
+  "$GH_HOOK" \
+  "gh repo delete -R $FORK_REPO_NAME --yes" \
+  "$OWN_REPO"
+
+# repo transfer
+expect_block \
+  "write-actions: 'gh repo transfer' for upstream" \
+  "$GH_HOOK" \
+  "gh repo transfer -R $UPSTREAM_REPO_NAME $OWN_OWNER" \
+  "$OWN_REPO"
+
+# pr lock/unlock
+expect_block \
+  "write-actions: 'gh pr lock' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr lock 42" \
+  "$FORK_REPO"
+
+expect_block \
+  "write-actions: 'gh pr unlock' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr unlock 42" \
+  "$FORK_REPO"
+
+# issue reopen
+expect_block \
+  "write-actions: 'gh issue reopen' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh issue reopen 42" \
+  "$FORK_REPO"
+
+expect_allow \
+  "write-actions: 'gh issue reopen -R own'" \
+  "$GH_HOOK" \
+  "gh issue reopen 42 -R $FORK_REPO_NAME" \
+  "$FORK_REPO"
+
+# pr ready
+expect_block \
+  "write-actions: 'gh pr ready' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr ready 42" \
+  "$FORK_REPO"
+
+# pr edit
+expect_block \
+  "write-actions: 'gh pr edit' in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr edit 42 --title \"new title\"" \
+  "$FORK_REPO"
+
+# issue edit
+expect_allow \
+  "write-actions: 'gh issue edit' in own repo" \
+  "$GH_HOOK" \
+  "gh issue edit 42 --title \"new title\"" \
+  "$OWN_REPO"
+
+# gist delete (should pass through — user-scoped)
+expect_allow \
+  "write-actions: 'gh gist delete' passes through (user-scoped)" \
+  "$GH_HOOK" \
+  "gh gist delete abc123" \
+  "$OWN_REPO"
+
+echo ""
+
+# ===================================================================
+# gh api edge cases
+# ===================================================================
+
+echo "--- gh api edge cases ---"
+echo ""
+
+# gh api graphql — uses POST implicitly but no repos/ path.
+# Write detected but repo resolves from origin (own repo) — allowed through.
+# Accepted gap: can't parse GraphQL queries for target repo.
+expect_allow \
+  "api: 'gh api graphql -f query=...' allowed (resolves from origin)" \
+  "$GH_HOOK" \
+  "gh api graphql -f query='{repository(owner:\"$UPSTREAM_OWNER\",name:\"repo\"){id}}'" \
+  "$OWN_REPO"
+
+# gh api to non-repo endpoint with write method.
+# Write detected but no repos/ path — resolves from origin (own repo).
+# Accepted gap: non-repo API endpoints resolve from CWD's origin.
+expect_allow \
+  "api: 'gh api user/repos -X POST' allowed (resolves from origin)" \
+  "$GH_HOOK" \
+  "gh api user/repos -X POST -f name=new-repo" \
+  "$OWN_REPO"
+
+# gh api GET with repos/ path to own repo (read-only, no write method)
+expect_allow \
+  "api: 'gh api repos/own/repo/pulls' allowed (GET, read-only)" \
+  "$GH_HOOK" \
+  "gh api repos/$FORK_REPO_NAME/pulls" \
+  "$OWN_REPO"
+
+# gh api -X PUT (less common write method)
+expect_block \
+  "api: 'gh api -X PUT' to upstream blocks" \
+  "$GH_HOOK" \
+  "gh api -X PUT repos/$UPSTREAM_REPO_NAME/subscription -f subscribed=true" \
+  "$OWN_REPO"
+
+# gh api -X PATCH to own repo
+expect_allow \
+  "api: 'gh api -X PATCH' to own repo allowed" \
+  "$GH_HOOK" \
+  "gh api -X PATCH repos/$FORK_REPO_NAME/issues/42 -f state=closed" \
+  "$OWN_REPO"
+
+# gh api --raw-field (another implicit POST variant)
+expect_block \
+  "api: 'gh api --raw-field' to upstream (implicit POST)" \
+  "$GH_HOOK" \
+  "gh api repos/$UPSTREAM_REPO_NAME/issues --raw-field title=test" \
+  "$OWN_REPO"
+
+echo ""
+
+# ===================================================================
+# Prose false positive resistance
+# ===================================================================
+
+echo "--- prose false positive resistance ---"
+echo ""
+
+# "git push" in commit message + real git push = 2 matches.
+# Known false positive: push_count sees 2 occurrences, triggers complexity gate.
+# Accepted: Claude would generate these as separate commands in practice.
+expect_block \
+  "prose: 'git push' in commit msg + real push = multi-push block (known FP)" \
+  "$PUSH_HOOK" \
+  "git commit -m \"docs: add note about git push workflow\" && git push" \
+  "$OWN_REPO"
+
+# Single push with --tags and quoted tag message containing loop keywords.
+# The push_count is 1 and loop detection strips the quoted prose — should allow.
+expect_allow \
+  "prose: push with tag annotation containing loop keywords" \
+  "$PUSH_HOOK" \
+  "git tag -a v1.0.0 -m \"for each feature in the release while maintaining stability\" && git push --tags" \
+  "$OWN_REPO"
+
+# gh pr create with body containing 'for x in' and 'while; do'
+expect_allow \
+  "prose: multi-keyword body ('for x in ... while ...; do ...')" \
+  "$GH_HOOK" \
+  "gh issue create --repo $OWN_OWNER/bosun --title \"Loop docs\" --body \"Use for item in list; do echo done. Or while true; do sleep 1; done\"" \
+  "$OWN_REPO"
+
+echo ""
+
+# ===================================================================
+# check-idle-return: additional edge cases
+# ===================================================================
+
+echo "--- check-idle-return: edge cases ---"
+echo ""
+
+# Test: negative gap (clock skew — marker is in the future)
+future_ts=$(($(date +%s) + 600))
+echo "$future_ts" > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ] && [ -z "$output" ]; then
+  echo "  PASS  idle: negative gap (future marker) — no nudge, no crash"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: negative gap (future marker) — exit $exit_code"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: marker with trailing whitespace/newline (real-world file writes)
+echo "  $(( $(date +%s) - 400 ))  " > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  idle: marker with surrounding whitespace — no crash"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: marker with surrounding whitespace — exit $exit_code"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Test: very large timestamp (year 2100) — gap exceeds 8h cap
+echo "4102444800" > "$idle_marker"
+output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
+exit_code=$?
+total=$((total + 1))
+if [ "$exit_code" -eq 0 ]; then
+  echo "  PASS  idle: far-future timestamp — no crash"
+  passed=$((passed + 1))
+else
+  echo "  FAIL  idle: far-future timestamp — exit $exit_code"
+  echo "        output: $output"
+  failed=$((failed + 1))
+fi
+
+# Cleanup
+rm -f "$idle_marker"
+
+echo ""
+
+# ===================================================================
 # Summary
 # ===================================================================
 

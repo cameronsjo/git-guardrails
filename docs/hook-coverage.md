@@ -1,7 +1,7 @@
 # Hook Coverage Analysis
 
-> Last reviewed: 2026-02-19
-> Test suite: `tests/test-guards.sh` (117 tests)
+> Last reviewed: 2026-02-20
+> Test suite: `tests/test-guards.sh` (154 tests)
 
 ## Design Philosophy
 
@@ -129,7 +129,13 @@ These are known scenarios we intentionally do not cover:
 7. **Variables in `cd` paths (`cd "$HOME/..."`) not expanded** — Static parsing only.
 
 8. **`gh api` to non-repo endpoints (`user/repos`, `orgs/*/repos`)** — Write detected
-   but repo resolution fails with guidance.
+   but repo resolves from CWD's origin. Allows through if origin is owned.
+
+9. **`git push` in commit message + real push** — Multi-push count sees 2 matches,
+   triggers complexity gate. Claude generates these as separate commands in practice.
+
+10. **Invalid JSON input** — `jq` returns empty string, hooks exit 0. Claude Code
+    always sends valid JSON from its protocol layer.
 
 ## warn-main-branch.sh
 
@@ -153,3 +159,30 @@ These are known scenarios we intentionally do not cover:
 | First edit in session (no marker) | High | No nudge, marker created | Covered |
 | Not in git repo | Low | Silent (exit 0) | Covered |
 | Exactly 300s boundary | Low | Nudge fires (>= 300) | Fixed (2026-02-19) |
+| Negative gap (future marker / clock skew) | Very low | No nudge (gap < 300) | Covered (2026-02-20) |
+| Marker with surrounding whitespace | Low | Gracefully handled | Covered (2026-02-20) |
+| Far-future timestamp (year 2100) | Very low | No crash, exceeds 8h cap | Covered (2026-02-20) |
+
+## Input Resilience
+
+| Scenario | Likelihood | Impact | Status |
+|----------|:----------:|:------:|:------:|
+| Empty input (no JSON) | Very low | Both hooks exit 0 | Fixed (2026-02-20) |
+| Missing `command` field in JSON | Very low | Both hooks exit 0 | Covered (2026-02-20) |
+| Invalid JSON (not parseable) | Very low | Both hooks exit 0 (jq `|| echo ""`) | Fixed (2026-02-20) |
+| Multiple `ALLOWED_OWNERS` (space-separated) | High | All owners checked correctly | Covered (2026-02-20) |
+
+## Additional WRITE_ACTIONS Coverage (2026-02-20)
+
+| Action | Resource | Status |
+|--------|----------|:------:|
+| `enable` | `workflow` | Covered |
+| `disable` | `workflow` | Covered |
+| `delete` | `repo` | Covered |
+| `transfer` | `repo` | Covered |
+| `lock` | `pr` | Covered |
+| `unlock` | `pr` | Covered |
+| `reopen` | `issue` | Covered |
+| `ready` | `pr` | Covered |
+| `edit` | `pr`, `issue` | Covered |
+| `delete` | `gist` | Covered (passthrough) |

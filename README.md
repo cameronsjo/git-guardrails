@@ -145,20 +145,18 @@ Both `guard-push-remote.sh` and `guard-gh-write.sh` read the following env vars 
 
 ## Known Limitations
 
-- **GitHub-only URL validation.** Only `github.com` URLs are ownership-checked. Non-GitHub
-  remotes (GitLab, Bitbucket, self-hosted) pass through unvalidated — the hook cannot
-  verify ownership on other hosts.
+- **Any-host URL validation.** `repo_from_url()` parses HTTPS, SSH, and SSH+port URLs
+  from any hostname (GitHub.com, GitHub Enterprise, GitLab, etc.). Owner matching is
+  purely string-based against `ALLOWED_OWNERS`.
 - **`cd` mid-chain partially resolved.** The hooks extract the last `cd` target from the
   command chain. Complex patterns (variables in paths, `pushd`/`popd`, nested subshells)
   are not resolved.
 - **`gh gist` commands are unguarded.** Gists are user-scoped, not repo-scoped. The hook
   allows all `gh gist` operations through without ownership checks.
-- **`gh workflow run/enable/disable` not detected as writes.** These subcommands are not
-  in the write action list and pass through unguarded.
 - **`gh repo create` with flags before positional arg** (e.g. `gh repo create --private
   my-repo`) is not resolved; the hook blocks as a false positive.
-- **Non-GitHub `gh api` targets** (e.g. GitHub Enterprise with a custom hostname) are not
-  resolved from the `repos/` path pattern.
+- **`gh api` to non-repo endpoints** (`user/repos`, `orgs/*/repos`, `graphql`) resolve
+  from CWD's origin remote. Allowed if origin is owned.
 
 See [`docs/hook-coverage.md`](docs/hook-coverage.md) for the full coverage analysis,
 including accepted gaps and the rationale for each.
@@ -174,4 +172,4 @@ The test suite requires:
 - A fork repo with an `upstream` remote pointing to a repo you don't own.
 - An owned repo with only an `origin` remote.
 
-The suite covers 44 scenarios across both guard hooks.
+The suite covers 154 scenarios across all four hooks.

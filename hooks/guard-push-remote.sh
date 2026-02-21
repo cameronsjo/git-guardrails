@@ -9,7 +9,7 @@
 set -euo pipefail
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || echo "")
 
 # Quick exit: no git push, no problem
 echo "$COMMAND" | grep -qw 'git push' || exit 0
