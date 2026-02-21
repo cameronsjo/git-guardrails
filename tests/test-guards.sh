@@ -26,18 +26,28 @@ passed=0
 failed=0
 total=0
 
+# --- Helpers: URL parsing (same logic as the hooks) ---
+
+repo_from_url() {
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
+}
+
+owner_from_url() {
+  repo_from_url "$1" | cut -d/ -f1
+}
+
 # --- Detect owners from repo remotes ---
 
 own_origin_url=$(git -C "$OWN_REPO" remote get-url origin 2>/dev/null)
-OWN_OWNER=$(echo "$own_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
+OWN_OWNER=$(owner_from_url "$own_origin_url")
 
 fork_origin_url=$(git -C "$FORK_REPO" remote get-url origin 2>/dev/null)
-FORK_OWNER=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-FORK_REPO_NAME=$(echo "$fork_origin_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+FORK_OWNER=$(owner_from_url "$fork_origin_url")
+FORK_REPO_NAME=$(repo_from_url "$fork_origin_url")
 
 fork_upstream_url=$(git -C "$FORK_REPO" remote get-url upstream 2>/dev/null)
-UPSTREAM_OWNER=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+)/.*|\1|p')
-UPSTREAM_REPO_NAME=$(echo "$fork_upstream_url" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p')
+UPSTREAM_OWNER=$(owner_from_url "$fork_upstream_url")
+UPSTREAM_REPO_NAME=$(repo_from_url "$fork_upstream_url")
 
 # Export for hooks — tests run as the repo owner
 export GIT_GUARDRAILS_ALLOWED_OWNERS="$OWN_OWNER"
@@ -146,9 +156,23 @@ expect_block \
   "$OWN_REPO"
 
 expect_block \
-  "unconfigured: gh hook blocks when ALLOWED_OWNERS unset" \
+  "unconfigured: gh hook blocks writes when ALLOWED_OWNERS unset" \
   "$GH_HOOK" \
   "gh issue create --title test" \
+  "$OWN_REPO"
+
+# Read-only gh commands pass through even when unconfigured
+# (needed for /guardrails-init to run `gh api user`)
+expect_allow \
+  "unconfigured: gh read-only command passes (gh api user)" \
+  "$GH_HOOK" \
+  "gh api user --jq .login" \
+  "$OWN_REPO"
+
+expect_allow \
+  "unconfigured: gh pr list passes (read-only)" \
+  "$GH_HOOK" \
+  "gh pr list" \
   "$OWN_REPO"
 
 # Non-push/non-gh commands still pass through
@@ -382,7 +406,7 @@ expect_allow \
   "gh pr create --repo $FORK_REPO_NAME --title \"test\"" \
   "$FORK_REPO"
 
-# --- Fork repo: -R to upstream should block ---
+# --- Fork repo: -R to upstream (fork-parent) should allow ---
 
 expect_allow \
   "gh: 'gh issue comment -R $UPSTREAM_REPO_NAME' (fork-parent allowed)" \
@@ -700,15 +724,15 @@ WARN_HOOK="$HOOKS_DIR/warn-main-branch.sh"
 # Create a temporary git repo for warn tests
 warn_tmp=$(mktemp -d)
 git -C "$warn_tmp" init -b main --quiet
-git -C "$warn_tmp" commit --allow-empty -m "init" --quiet
+git -C "$warn_tmp" -c commit.gpgsign=false commit --allow-empty -m "init" --quiet
 
 # Compute the marker path using the same method as the hook:
 # git rev-parse --show-toplevel (canonical path) + PPID of test shell
 warn_repo_root=$(git -C "$warn_tmp" rev-parse --show-toplevel 2>/dev/null)
 warn_hash=$(echo "$warn_repo_root" | (md5 -q 2>/dev/null || md5sum | cut -d' ' -f1))
 [ -z "$warn_hash" ] && warn_hash=$(echo "$warn_repo_root" | cksum | cut -d' ' -f1)
-warn_marker="/tmp/.claude-main-branch-warned-${warn_hash}-$$"
-rm -f "$warn_marker"
+# Clean up any stale markers for this repo from previous test runs
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 
 # Test: warns on main branch
 output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
@@ -722,20 +746,39 @@ else
   failed=$((failed + 1))
 fi
 
-# Test: second call is suppressed (marker exists from previous call)
-output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
+# Test: second call suppressed by marker.
+#
+# The hook uses $PPID to scope the marker to one Claude Code session. In tests,
+# each $() subshell gets a fresh PID, so consecutive $() calls see different
+# PPIDs and can't share a marker. We work around this by running both calls
+# from a helper script so they share the same parent PID.
+warn_suppress_helper=$(mktemp /tmp/warn-suppress-XXXX.sh)
+cat > "$warn_suppress_helper" << SUPPRESS_INNER
+#!/usr/bin/env bash
+cd "$warn_tmp"
+bash "$WARN_HOOK" > /tmp/warn-suppress-call1.out 2>&1
+bash "$WARN_HOOK" > /tmp/warn-suppress-call2.out 2>&1
+SUPPRESS_INNER
+chmod +x "$warn_suppress_helper"
+# Clean markers before running helper
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
+bash "$warn_suppress_helper"
+suppress_call1=$(cat /tmp/warn-suppress-call1.out 2>/dev/null || true)
+suppress_call2=$(cat /tmp/warn-suppress-call2.out 2>/dev/null || true)
+rm -f "$warn_suppress_helper" /tmp/warn-suppress-call1.out /tmp/warn-suppress-call2.out
 total=$((total + 1))
-if [ -z "$output" ]; then
+if echo "$suppress_call1" | grep -q "editing files directly on" && [ -z "$suppress_call2" ]; then
   echo "  PASS  warn: second call suppressed by marker"
   passed=$((passed + 1))
 else
-  echo "  FAIL  warn: second call suppressed by marker (got output)"
-  echo "        output: $output"
+  echo "  FAIL  warn: second call suppressed by marker"
+  echo "        call1: $suppress_call1"
+  echo "        call2: $suppress_call2"
   failed=$((failed + 1))
 fi
 
-# Test: warns again after marker removed
-rm -f "$warn_marker"
+# Test: warns again after marker removed (uses helper to match PPID)
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
 total=$((total + 1))
 if echo "$output" | grep -q "editing files directly on"; then
@@ -746,7 +789,7 @@ else
   echo "        output: $output"
   failed=$((failed + 1))
 fi
-rm -f "$warn_marker"
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 
 # Test: silent on feature branch
 git -C "$warn_tmp" checkout -b feature/test --quiet
@@ -763,7 +806,7 @@ fi
 
 # Test: warns on master branch
 git -C "$warn_tmp" checkout -b master --quiet
-rm -f "$warn_marker"
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 output=$(cd "$warn_tmp" && bash "$WARN_HOOK" 2>&1)
 total=$((total + 1))
 if echo "$output" | grep -q "editing files directly on"; then
@@ -774,7 +817,7 @@ else
   echo "        output: $output"
   failed=$((failed + 1))
 fi
-rm -f "$warn_marker"
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 
 # Test: silent in detached HEAD
 git -C "$warn_tmp" checkout --detach --quiet
@@ -802,7 +845,7 @@ else
 fi
 
 # Test: always exits 0 (advisory, never blocks)
-rm -f "$warn_marker"
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 git -C "$warn_tmp" checkout main --quiet
 (cd "$warn_tmp" && bash "$WARN_HOOK") >/dev/null 2>&1
 exit_code=$?
@@ -817,7 +860,7 @@ fi
 
 # Cleanup temp repo and markers
 rm -rf "$warn_tmp"
-rm -f "$warn_marker"
+rm -f /tmp/.claude-main-branch-warned-${warn_hash}-* 2>/dev/null || true
 
 echo ""
 
@@ -915,15 +958,15 @@ else
   failed=$((failed + 1))
 fi
 
-# Test: 28799s (just under 8h cap) — nudge fires
-echo $(($(date +%s) - 28799)) > "$idle_marker"
+# Test: ~8h minus margin (just under 8h cap) — nudge fires
+echo $(($(date +%s) - 28790)) > "$idle_marker"
 output=$(cd "$OWN_REPO" && bash "$IDLE_HOOK" 2>&1)
 total=$((total + 1))
 if echo "$output" | grep -q "since your last edit"; then
-  echo "  PASS  idle: 28799s (just under 8h cap) — nudge fires"
+  echo "  PASS  idle: just under 8h cap — nudge fires"
   passed=$((passed + 1))
 else
-  echo "  FAIL  idle: 28799s (just under 8h cap) — nudge fires"
+  echo "  FAIL  idle: just under 8h cap — nudge fires"
   echo "        output: $output"
   failed=$((failed + 1))
 fi
@@ -999,6 +1042,203 @@ fi
 
 # Cleanup
 rm -f "$idle_marker"
+
+echo ""
+
+# ===================================================================
+# SSH port URLs (ssh://host:port/owner/repo.git)
+# ===================================================================
+
+echo "--- SSH port URLs ---"
+echo ""
+
+# Create temp repos with ssh:// port-format remotes
+SSH_PORT_OWN=$(mktemp -d)
+git init -q "$SSH_PORT_OWN"
+git -C "$SSH_PORT_OWN" remote add origin "ssh://git@github.com:22/$OWN_OWNER/own-repo.git"
+
+SSH_PORT_FORK=$(mktemp -d)
+git init -q "$SSH_PORT_FORK"
+git -C "$SSH_PORT_FORK" remote add origin "ssh://git@github.com:443/$OWN_OWNER/fork-repo.git"
+git -C "$SSH_PORT_FORK" remote add upstream "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/fork-repo.git"
+
+SSH_PORT_UNOWNED=$(mktemp -d)
+git init -q "$SSH_PORT_UNOWNED"
+git -C "$SSH_PORT_UNOWNED" remote add origin "ssh://git@github.com:22/$UPSTREAM_OWNER/their-repo.git"
+
+SSH_PORT_443=$(mktemp -d)
+git init -q "$SSH_PORT_443"
+git -C "$SSH_PORT_443" remote add origin "ssh://git@ssh.github.com:443/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via ssh:// port URLs ---
+
+# guard-push-remote: push in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: push allowed in own repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: write in own repo via ssh:// port URL
+expect_allow \
+  "ssh-port: gh issue create in own repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_OWN"
+
+# guard-gh-write: -R to own fork via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R own fork (port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
+# --- Unhappy paths: blocks via ssh:// port URLs ---
+
+# guard-push-remote: push to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: push blocked to unowned repo (port 22)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-push-remote: push to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: push blocked to unowned repo (ssh.github.com:443)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: write to unowned repo via ssh:// port URL
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (port 22)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_UNOWNED"
+
+# guard-gh-write: write to unowned repo via ssh.github.com:443
+expect_block \
+  "ssh-port: gh issue create blocked on unowned repo (ssh.github.com:443)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$SSH_PORT_443"
+
+# guard-gh-write: fork detection works with ssh:// port URLs
+expect_block \
+  "ssh-port: gh pr create in fork (no -R, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$SSH_PORT_FORK"
+
+# guard-gh-write: -R to upstream (fork-parent) via ssh:// port URL
+expect_allow \
+  "ssh-port: gh pr create -R upstream (fork-parent, port 443)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$SSH_PORT_FORK"
+
+# Cleanup
+rm -rf "$SSH_PORT_OWN" "$SSH_PORT_FORK" "$SSH_PORT_UNOWNED" "$SSH_PORT_443"
+
+echo ""
+
+# ===================================================================
+# GitHub Enterprise / custom host URLs
+# ===================================================================
+
+echo "--- GitHub Enterprise URLs ---"
+echo ""
+
+# Create temp repos with enterprise hostnames
+GHE_OWN_HTTPS=$(mktemp -d)
+git init -q "$GHE_OWN_HTTPS"
+git -C "$GHE_OWN_HTTPS" remote add origin "https://github.example.com/$OWN_OWNER/own-repo.git"
+
+GHE_OWN_SSH=$(mktemp -d)
+git init -q "$GHE_OWN_SSH"
+git -C "$GHE_OWN_SSH" remote add origin "git@github.example.com:$OWN_OWNER/own-repo.git"
+
+GHE_FORK=$(mktemp -d)
+git init -q "$GHE_FORK"
+git -C "$GHE_FORK" remote add origin "https://github.example.com/$OWN_OWNER/fork-repo.git"
+git -C "$GHE_FORK" remote add upstream "git@github.example.com:$UPSTREAM_OWNER/fork-repo.git"
+
+GHE_UNOWNED=$(mktemp -d)
+git init -q "$GHE_UNOWNED"
+git -C "$GHE_UNOWNED" remote add origin "https://github.example.com/$UPSTREAM_OWNER/their-repo.git"
+
+GHE_SSH_PORT=$(mktemp -d)
+git init -q "$GHE_SSH_PORT"
+git -C "$GHE_SSH_PORT" remote add origin "ssh://git@github.example.com:2222/$UPSTREAM_OWNER/their-repo.git"
+
+# --- Happy paths: own repos via enterprise URLs ---
+
+expect_allow \
+  "ghe: push allowed in own repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: push allowed in own repo (SSH)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_OWN_SSH"
+
+expect_allow \
+  "ghe: gh issue create in own repo (HTTPS)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_HTTPS"
+
+expect_allow \
+  "ghe: gh issue create in own repo (SSH)" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_OWN_SSH"
+
+# --- Unhappy paths: blocks via enterprise URLs ---
+
+expect_block \
+  "ghe: push blocked to unowned repo (HTTPS)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_UNOWNED"
+
+expect_block \
+  "ghe: push blocked to unowned repo (SSH+port)" \
+  "$PUSH_HOOK" \
+  "git push" \
+  "$GHE_SSH_PORT"
+
+expect_block \
+  "ghe: gh issue create blocked on unowned repo" \
+  "$GH_HOOK" \
+  "gh issue create --title test" \
+  "$GHE_UNOWNED"
+
+# --- Fork detection works with enterprise URLs ---
+
+expect_block \
+  "ghe: gh pr create in fork (no -R)" \
+  "$GH_HOOK" \
+  "gh pr create --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R own fork" \
+  "$GH_HOOK" \
+  "gh pr create -R $OWN_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+expect_allow \
+  "ghe: gh pr create -R upstream (fork-parent)" \
+  "$GH_HOOK" \
+  "gh pr create -R $UPSTREAM_OWNER/fork-repo --title test" \
+  "$GHE_FORK"
+
+# Cleanup
+rm -rf "$GHE_OWN_HTTPS" "$GHE_OWN_SSH" "$GHE_FORK" "$GHE_UNOWNED" "$GHE_SSH_PORT"
 
 echo ""
 

@@ -19,12 +19,6 @@ echo "$COMMAND" | grep -qE '\bgh\b' || exit 0
 ALLOWED_OWNERS="${GIT_GUARDRAILS_ALLOWED_OWNERS:-}"
 ALLOWED_REPOS="${GIT_GUARDRAILS_ALLOWED_REPOS:-}"
 
-if [ -z "$ALLOWED_OWNERS" ]; then
-  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
-  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
-  exit 2
-fi
-
 # --- Helpers ---
 
 is_allowed() {
@@ -49,7 +43,11 @@ is_allowed() {
 }
 
 repo_from_url() {
-  echo "$1" | sed -nE 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|p'
+  # Normalize any git remote URL to owner/repo:
+  #   https://host/owner/repo.git  — strip scheme+host
+  #   git@host:owner/repo.git      — strip user@host:
+  #   ssh://user@host:port/owner/repo.git — strip scheme+userinfo+host+port
+  echo "$1" | sed -E 's|^.*://[^/]*/||; s|^[^:]*:||; s|\.git$||' | grep -oE '^[^/]+/[^/]+'
 }
 
 is_fork_parent() {
@@ -101,6 +99,14 @@ fi
 
 # Not a write — allow
 $is_write || exit 0
+
+# Fail-safe: block writes when unconfigured (but read-only gh commands above pass through,
+# so /guardrails-init can run `gh api user` to detect identity).
+if [ -z "$ALLOWED_OWNERS" ]; then
+  echo "🚫 git-guardrails: Not configured — run /guardrails-init to set up" >&2
+  echo "   GIT_GUARDRAILS_ALLOWED_OWNERS is not set." >&2
+  exit 2
+fi
 
 # Gists are user-scoped, not repo-scoped — no ownership to validate
 if echo "$COMMAND" | grep -qE 'gh\s+gist\s'; then
@@ -175,10 +181,6 @@ if [ -z "$target_repo" ]; then
   # Non-fork: resolve from origin
   origin_url=$(git -C "$work_dir" remote get-url origin 2>/dev/null || echo "")
   if [ -n "$origin_url" ]; then
-    # Non-GitHub origins can't be validated — allow through
-    if ! echo "$origin_url" | grep -qiE 'github\.com[:/]'; then
-      exit 0
-    fi
     target_repo=$(repo_from_url "$origin_url")
   fi
 fi
